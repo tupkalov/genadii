@@ -9,7 +9,19 @@ from aiogram.types import Message
 TG_LIMIT = 3500  # запас до 4096 на HTML-теги
 
 
+def _demote_html(text: str) -> str:
+    """Модель иногда выдаёт HTML-теги (научилась из истории) — конвертируем в
+    Markdown, чтобы они не показывались сырыми."""
+    text = re.sub(r"</?pre[^>]*>", "```", text)
+    text = re.sub(r"<code>(.*?)</code>", r"`\1`", text, flags=re.S)
+    text = re.sub(r"</?(?:b|strong)>", "**", text)
+    text = re.sub(r"</?(?:i|em)>", "*", text)
+    text = re.sub(r'<a href="([^"]+)">(.*?)</a>', r"[\2](\1)", text, flags=re.S)
+    return text
+
+
 def md_to_html(text: str) -> str:
+    text = _demote_html(text)
     tokens: list[str] = []
 
     def stash(content: str, tag: str) -> str:

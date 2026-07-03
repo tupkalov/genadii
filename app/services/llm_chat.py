@@ -57,9 +57,17 @@ async def _build_messages(
     session: AsyncSession,
     workspace: Workspace,
     extra_user_message: str | list[dict] | None = None,
+    tools: list | None = None,
 ) -> list[dict]:
     settings = get_settings()
     system = build_system_prompt(workspace)
+
+    if tools:
+        system += (
+            "\n\nТвои инструменты (вызывай их сам, когда уместно; на вопрос «что "
+            "умеешь» перечисляй именно их):\n"
+            + "\n".join(f"- {t.name}: {t.description.splitlines()[0]}" for t in tools)
+        )
 
     summary = (workspace.settings or {}).get("history_summary")
     if summary:
@@ -101,10 +109,10 @@ async def generate_reply(
     мультимодальный режим — ход выполняет vision-модель.
     bot/chat_id/target_message_id пробрасываются в tools (реакции).
     """
-    messages = await _build_messages(session, workspace, extra_user_message)
+    tools = await permissions.enabled_tools(session, workspace)
+    messages = await _build_messages(session, workspace, extra_user_message, tools)
     model = pick_model(workspace, multimodal=isinstance(extra_user_message, list))
 
-    tools = await permissions.enabled_tools(session, workspace)
     tool_schemas = [t.to_openrouter() for t in tools] or None
     ctx = ToolContext(
         session=session,

@@ -56,6 +56,7 @@ register(
             "required": ["prompt"],
         },
         handler=_generate_image,
+        hourly_limit=15,
         default_enabled=True,  # ~$0.04/шт — расходы ограничивает /budget
     )
 )

@@ -2,7 +2,13 @@ from app.services import memory
 from app.tools.registry import Tool, ToolContext, register
 
 
+FACT_LIMIT = 500
+
+
 async def _remember(ctx: ToolContext, fact: str) -> str:
+    fact = fact.strip()
+    if len(fact) > FACT_LIMIT:
+        return f"Факт слишком длинный (>{FACT_LIMIT} символов) — сформулируй короче."
     entry = await memory.add_fact(ctx.session, ctx.workspace, ctx.user, fact)
     return f"Запомнил (факт #{entry.id}): {entry.content}"
 

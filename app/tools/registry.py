@@ -27,6 +27,7 @@ class Tool:
     parameters: dict[str, Any]  # JSON Schema аргументов
     handler: Callable[..., Awaitable[str]]  # async (ctx, **kwargs) -> str
     default_enabled: bool = False  # включён ли без явного permission'а
+    hourly_limit: int | None = None  # лимит вызовов на пользователя в час (дорогие tools)
 
     def to_openrouter(self) -> dict:
         return {

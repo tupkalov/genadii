@@ -1,12 +1,26 @@
 import json
 import logging
 
+from redis.asyncio import Redis
+
+from app.config import get_settings
 from app.services import audit
 from app.tools.registry import TOOLS, ToolContext
 
 logger = logging.getLogger("gennady.tools")
 
 RESULT_AUDIT_LIMIT = 500
+
+_redis = Redis.from_url(get_settings().redis_url)
+
+
+async def _rate_limited(user_id: int, tool_name: str, limit: int) -> bool:
+    """Скользящее часовое окно на пользователя+инструмент. True — лимит исчерпан."""
+    key = f"toollimit:{user_id}:{tool_name}"
+    count = await _redis.incr(key)
+    if count == 1:
+        await _redis.expire(key, 3600)
+    return count > limit
 
 
 async def execute_tool_call(ctx: ToolContext, tool_call: dict) -> str:
@@ -24,6 +38,13 @@ async def execute_tool_call(ctx: ToolContext, tool_call: dict) -> str:
         result = f"Ошибка: инструмент «{name}» не существует."
     elif args is None:
         result = "Ошибка: аргументы не являются валидным JSON."
+    elif tool.hourly_limit and await _rate_limited(
+        ctx.user.id, tool.name, tool.hourly_limit
+    ):
+        result = (
+            f"Лимит на «{name}» исчерпан ({tool.hourly_limit}/час у пользователя). "
+            "Скажи пользователю подождать."
+        )
     else:
         try:
             result = await tool.handler(ctx, **args)

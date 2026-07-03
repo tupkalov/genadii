@@ -16,6 +16,7 @@ COMMON_COMMANDS = [
     BotCommand(command="tools", description="Мои инструменты в этом чате"),
     BotCommand(command="model", description="Какая модель думает за меня"),
     BotCommand(command="scripts", description="Сохранённые скрипты этого чата"),
+    BotCommand(command="proactive", description="Болтливость в группе (0–100%)"),
     BotCommand(command="stats", description="Расходы этого чата"),
     BotCommand(command="budget", description="Месячный лимит расходов"),
 ]

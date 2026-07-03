@@ -2,6 +2,7 @@
 import app.tools.history  # noqa: F401
 import app.tools.images  # noqa: F401
 import app.tools.memory  # noqa: F401
+import app.tools.reactions  # noqa: F401
 import app.tools.reminders  # noqa: F401
 import app.tools.sandbox  # noqa: F401
 import app.tools.scripts  # noqa: F401

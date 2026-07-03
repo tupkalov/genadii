@@ -14,6 +14,10 @@ class ToolContext:
     user: User
     # Файлы, которые tools хотят отправить в чат вместе с ответом
     attachments: list[bytes] = field(default_factory=list)
+    # Для tools, которым нужен доступ к Telegram (реакции): заполняется в чат-хендлере
+    bot: object | None = None
+    chat_id: int | None = None
+    target_message_id: int | None = None
 
 
 @dataclass

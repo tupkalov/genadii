@@ -90,18 +90,29 @@ async def generate_reply(
     workspace: Workspace,
     user: User,
     extra_user_message: str | list[dict] | None = None,
+    bot: object | None = None,
+    chat_id: int | None = None,
+    target_message_id: int | None = None,
 ) -> ChatOutcome:
     """Контекст + tool-calling цикл. Входящее сообщение уже в истории.
 
     extra_user_message-список (content-массив с image_url) включает
     мультимодальный режим — ход выполняет vision-модель.
+    bot/chat_id/target_message_id пробрасываются в tools (реакции).
     """
     messages = await _build_messages(session, workspace, extra_user_message)
     model = pick_model(workspace, multimodal=isinstance(extra_user_message, list))
 
     tools = await permissions.enabled_tools(session, workspace)
     tool_schemas = [t.to_openrouter() for t in tools] or None
-    ctx = ToolContext(session=session, workspace=workspace, user=user)
+    ctx = ToolContext(
+        session=session,
+        workspace=workspace,
+        user=user,
+        bot=bot,
+        chat_id=chat_id,
+        target_message_id=target_message_id,
+    )
 
     usages: list[client.LlmResult] = []
     for _ in range(MAX_TOOL_ITERATIONS):
@@ -129,6 +140,34 @@ async def generate_reply(
         usages=usages,
         attachments=ctx.attachments,
     )
+
+
+INTERJECT_INSTRUCTION = (
+    "[Системное: тебя НИКТО не звал. Это фоновая проверка — стоит ли вставить "
+    "реплику в текущий разговор. Отвечай, ТОЛЬКО если тебе есть что добавить по "
+    "-настоящему ценное, уместное и в твоём характере. Если добавить нечего — "
+    "ответь ровно «SKIP» и ничего больше. Не здоровайся, не комментируй ради "
+    "комментария.]"
+)
+
+
+async def maybe_interject(
+    session: AsyncSession,
+    workspace: Workspace,
+    user: User,
+    bot: object,
+    chat_id: int,
+) -> ChatOutcome | None:
+    """Проактивная реплика: LLM сам решает, вставить что-то или смолчать (SKIP)."""
+    outcome = await generate_reply(
+        session, workspace, user,
+        extra_user_message=INTERJECT_INSTRUCTION,
+        bot=bot, chat_id=chat_id,
+    )
+    text = outcome.text.strip()
+    if not text or (len(text) < 12 and "SKIP" in text.upper()):
+        return None
+    return outcome
 
 
 async def log_usages(

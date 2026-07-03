@@ -1,19 +1,23 @@
 import asyncio
 import base64
 import logging
+import random
 from dataclasses import dataclass, field
 
 from aiogram import F, Router
 from aiogram.types import BufferedInputFile, Message
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.formatting import reply_rendered
+from app.bot.formatting import reply_rendered, send_rendered
 from app.config import get_settings
 from app.db.models import User, Workspace, WorkspaceType
 from app.db.session import session_factory
 from app.llm import client
 from app.llm.client import LlmError
 from app.services import budget, llm_chat, messages
+
+_redis = Redis.from_url(get_settings().redis_url)
 
 logger = logging.getLogger("gennady.chat")
 
@@ -64,7 +68,11 @@ async def _generate_and_send(
 
     try:
         outcome = await llm_chat.generate_reply(
-            session, workspace, user, extra_user_message=extra_user_message
+            session, workspace, user,
+            extra_user_message=extra_user_message,
+            bot=message.bot,
+            chat_id=message.chat.id,
+            target_message_id=message.message_id,
         )
     except LlmError as exc:
         logger.error("LLM error (workspace=%s): %s", workspace.id, exc)
@@ -158,6 +166,34 @@ async def _delayed_reply(
             pass
 
 
+async def _maybe_proactive(
+    message: Message, user: User, workspace: Workspace, session: AsyncSession
+) -> None:
+    """С шансом proactive_percent Геннадий сам вставляет реплику в разговор."""
+    percent = (workspace.settings or {}).get("proactive_percent", 0)
+    if not percent or random.random() * 100 >= percent:
+        return
+    # Кулдаун: не чаще раза в proactive_cooldown секунд на чат
+    settings = get_settings()
+    if not await _redis.set(
+        f"proactive:{message.chat.id}", "1", ex=settings.proactive_cooldown, nx=True
+    ):
+        return
+    if await _check_budget(message, session, workspace):
+        return
+
+    outcome = await llm_chat.maybe_interject(
+        session, workspace, user, message.bot, message.chat.id
+    )
+    if outcome is None:
+        return
+    sent = await send_rendered(message.bot, message.chat.id, outcome.text.strip())
+    saved = await messages.save_assistant(
+        session, workspace, outcome.text.strip(), tg_message_id=sent.message_id
+    )
+    await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id)
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def on_text(
     message: Message,
@@ -171,6 +207,7 @@ async def on_text(
     if workspace.type == WorkspaceType.group and not _addressed_to_bot(
         message, bot_username
     ):
+        await _maybe_proactive(message, user, workspace, session)
         return
     _schedule_reply(message, user.id, workspace.id)
 

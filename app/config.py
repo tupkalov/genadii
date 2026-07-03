@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Переопределяется per-workspace командой /budget.
     default_monthly_budget_usd: float = 0
 
+    # Хост сервера для подсказки про дашборд (для SSH-туннеля). Пусто — покажем плейсхолдер.
+    server_host: str = ""
+
     env: str = "dev"
 
     @property

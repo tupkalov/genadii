@@ -119,6 +119,29 @@ async def cmd_kick(
     await _reply(message, session, workspace, text)
 
 
+def dashboard_hint() -> str:
+    from app.config import get_settings
+
+    host = get_settings().server_host or "<твой-сервер>"
+    return (
+        "🖥 <b>Веб-дашборд</b> (расходы, память, задачи, аудит)\n"
+        "Крутится на сервере по адресу <code>http://localhost:8000/</code> "
+        "(наружу не смотрит — только localhost).\n\n"
+        "Открыть со своей машины через SSH-туннель:\n"
+        f"<code>ssh -L 8000:localhost:8000 {host}</code>\n"
+        "затем в браузере — <code>http://localhost:8000/</code>"
+    )
+
+
+@router.message(Command("dashboard"))
+async def cmd_dashboard(
+    message: Message, user: User, workspace: Workspace, session: AsyncSession
+) -> None:
+    if user.role != UserRole.admin:
+        return await _reply(message, session, workspace, NOT_ADMIN)
+    await _reply(message, session, workspace, dashboard_hint())
+
+
 @router.message(Command("users"))
 async def cmd_users(
     message: Message, user: User, workspace: Workspace, session: AsyncSession

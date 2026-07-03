@@ -26,6 +26,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="invite", description="Добавить в whitelist: id или reply"),
     BotCommand(command="kick", description="Убрать из whitelist: id или reply"),
     BotCommand(command="users", description="Список пользователей"),
+    BotCommand(command="dashboard", description="Как открыть веб-дашборд"),
 ]
 
 

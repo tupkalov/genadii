@@ -4,7 +4,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import LlmUsage, Message, MessageRole, User, Workspace, WorkspaceType
+from app.db.models import (
+    LlmUsage,
+    Message,
+    MessageRole,
+    User,
+    UserRole,
+    Workspace,
+    WorkspaceType,
+)
 from app.llm import client
 from app.llm.prompts import build_system_prompt
 from app.services import memory
@@ -58,9 +66,19 @@ async def _build_messages(
     workspace: Workspace,
     extra_user_message: str | list[dict] | None = None,
     tools: list | None = None,
+    user: User | None = None,
 ) -> list[dict]:
     settings = get_settings()
     system = build_system_prompt(workspace)
+
+    if user is not None and user.role == UserRole.admin:
+        from app.bot.handlers.admin import dashboard_hint
+
+        system += (
+            "\n\nСобеседник — админ. Если спросит про дашборд/веб-панель/статистику "
+            "в браузере, дай эту инструкцию (перескажи своими словами, ссылку и "
+            "SSH-команду сохрани точно):\n" + dashboard_hint()
+        )
 
     if tools:
         system += (
@@ -110,7 +128,7 @@ async def generate_reply(
     bot/chat_id/target_message_id пробрасываются в tools (реакции).
     """
     tools = await permissions.enabled_tools(session, workspace)
-    messages = await _build_messages(session, workspace, extra_user_message, tools)
+    messages = await _build_messages(session, workspace, extra_user_message, tools, user)
     model = pick_model(workspace, multimodal=isinstance(extra_user_message, list))
 
     tool_schemas = [t.to_openrouter() for t in tools] or None

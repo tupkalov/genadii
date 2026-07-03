@@ -6,6 +6,7 @@ from aiogram.types import (
     MessageOriginHiddenUser,
     MessageOriginUser,
 )
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Message, MessageRole, User, Workspace
@@ -59,6 +60,31 @@ async def save_user_text(
         content=content,
     )
     session.add(message)
+    await session.flush()
+    return message
+
+
+async def update_edited(
+    session: AsyncSession, workspace: Workspace, tg_message: TgMessage
+) -> Message | None:
+    """Правка сообщения пользователем — обновляет content в истории по tg_message_id."""
+    content = tg_message.text or tg_message.caption
+    if not content:
+        return None
+    label = forward_label(tg_message.forward_origin)
+    if label:
+        content = f"[переслано от {label}]\n{content}"
+
+    message = await session.scalar(
+        select(Message).where(
+            Message.workspace_id == workspace.id,
+            Message.tg_message_id == tg_message.message_id,
+            Message.role == MessageRole.user,
+        )
+    )
+    if message is None:
+        return None
+    message.content = content
     await session.flush()
     return message
 

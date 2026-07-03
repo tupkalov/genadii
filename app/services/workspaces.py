@@ -6,6 +6,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import User, Workspace, WorkspaceMember, WorkspaceType
 
 
+async def migrate_chat_id(
+    session: AsyncSession, old_chat_id: int, new_chat_id: int
+) -> bool:
+    """Группа стала супергруппой — Telegram сменил chat_id. Переносим workspace,
+    чтобы не потерять историю/память. Возвращает True, если перенос выполнен."""
+    workspace = await session.scalar(
+        select(Workspace).where(Workspace.tg_chat_id == old_chat_id)
+    )
+    if workspace is None:
+        return False
+    # Если в новую супергруппу уже кто-то писал — целевой workspace существует,
+    # безопаснее не сливать автоматически.
+    conflict = await session.scalar(
+        select(Workspace).where(Workspace.tg_chat_id == new_chat_id)
+    )
+    if conflict is not None:
+        return False
+    workspace.tg_chat_id = new_chat_id
+    await session.flush()
+    return True
+
+
 async def resolve(session: AsyncSession, chat: Chat, user: User) -> Workspace:
     """Находит или создаёт workspace для чата и гарантирует членство user'а.
 

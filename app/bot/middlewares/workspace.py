@@ -22,6 +22,9 @@ class WorkspaceMiddleware(BaseMiddleware):
         workspace = await workspaces.resolve(session, event.chat, user)
         data["workspace"] = workspace
 
-        await messages.save_incoming(session, workspace, user, event)
+        # edited_message приходит сюда же — его не сохраняем как новое,
+        # обновлением занимается отдельный хендлер
+        if not data.get("_skip_save"):
+            await messages.save_incoming(session, workspace, user, event)
 
         return await handler(event, data)

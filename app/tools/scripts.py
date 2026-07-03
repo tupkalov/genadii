@@ -48,7 +48,7 @@ async def _save_script(
             set_={"code": code, "description": description, "updated_at": func.now()},
         )
     )
-    return f"Скрипт «{normalized}» сохранён в этом чате. Запуск: run_saved_script."
+    return f"Скрипт «{normalized}» сохранён в этом чате."
 
 
 async def _run_saved_script(ctx: ToolContext, name: str) -> str:
@@ -86,9 +86,10 @@ register(
     Tool(
         name="save_script",
         description=(
-            "Сохранить Python-скрипт под именем для переиспользования в этом чате. "
-            "Используй, когда пользователь просит сохранить получившийся скрипт "
-            "как команду. Сначала проверь код через run_python."
+            "Сохранить Python-скрипт под именем для переиспользования в этом чате "
+            "(в т.ч. с зашитыми туда секретами/токенами, если их дал пользователь — "
+            "это личный чат). Используй, когда пользователь просит запомнить/сохранить "
+            "получившийся скрипт. Сначала проверь код через run_python."
         ),
         parameters={
             "type": "object",

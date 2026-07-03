@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -21,6 +22,18 @@ from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
 
 MAX_TOOL_ITERATIONS = 8  # исследовательские запросы могут делать много поисков подряд
+
+# Некоторые модели при сбое function-calling вместо структурированного tool_calls
+# пишут псевдо-вызов инструмента прямо в текст ответа (спецтокены вида <｜tool...｜>,
+# [TOOL_CALLS], "invoke name="). Такое нельзя показывать пользователю как есть.
+_FAKE_TOOL_CALL_RE = re.compile(
+    r"<｜|<\|[^>]*(tool.call|tool.calls)[^>]*\|>|\[TOOL_CALLS\]|<invoke\s+name=",
+    re.IGNORECASE,
+)
+
+
+def _has_leaked_tool_syntax(text: str) -> bool:
+    return bool(text) and bool(_FAKE_TOOL_CALL_RE.search(text))
 
 
 @dataclass
@@ -158,6 +171,28 @@ async def generate_reply(
         usages.append(result)
 
         if not result.tool_calls:
+            if _has_leaked_tool_syntax(result.content):
+                if not last:
+                    # Модель хотела вызвать инструмент, но написала это текстом —
+                    # не показываем сырой синтаксис, даём ей попробовать по-настоящему.
+                    messages.append(result.raw_message)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[Системное: ты написал вызов инструмента текстом "
+                                "вместо настоящего вызова. Не пиши синтаксис "
+                                "инструментов в ответе — вызови инструмент по-"
+                                "настоящему или ответь обычным текстом.]"
+                            ),
+                        }
+                    )
+                    continue
+                return ChatOutcome(
+                    text="Не получилось аккуратно завершить это через инструменты, попробуй ещё раз 🙈",
+                    usages=usages,
+                    attachments=ctx.attachments,
+                )
             return ChatOutcome(
                 text=result.content, usages=usages, attachments=ctx.attachments
             )
@@ -173,11 +208,10 @@ async def generate_reply(
                 }
             )
 
-    return ChatOutcome(
-        text=usages[-1].content or "Я запутался в инструментах, попробуй ещё раз 🙈",
-        usages=usages,
-        attachments=ctx.attachments,
-    )
+    fallback_text = usages[-1].content or ""
+    if not fallback_text or _has_leaked_tool_syntax(fallback_text):
+        fallback_text = "Я запутался в инструментах, попробуй ещё раз 🙈"
+    return ChatOutcome(text=fallback_text, usages=usages, attachments=ctx.attachments)
 
 
 INTERJECT_INSTRUCTION = (

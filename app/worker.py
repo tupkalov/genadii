@@ -1,0 +1,217 @@
+import logging
+from datetime import datetime, timezone
+
+from aiogram import Bot
+from aiogram.types import BufferedInputFile
+from arq import cron
+from arq.connections import RedisSettings
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.bot.formatting import send_rendered
+from app.config import get_settings
+from app.db.models import ScheduledTask, User, Workspace
+from app.db.session import session_factory
+from app.services import budget, llm_chat, messages, reminders
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("gennady.worker")
+
+TG_LIMIT = 4000
+
+
+async def startup(ctx: dict) -> None:
+    ctx["bot"] = Bot(token=get_settings().bot_token)
+
+    # Рестарт мог прервать выполнение — возвращаем зависшие 'running' в очередь.
+    # Worker один, поэтому сброс на старте безопасен; повторный запуск задачи допустим.
+    async with session_factory() as session:
+        result = await session.execute(
+            update(ScheduledTask)
+            .where(ScheduledTask.status == "running")
+            .values(status="pending")
+        )
+        await session.commit()
+    if result.rowcount:
+        logger.warning("Сброшено зависших running-задач: %s", result.rowcount)
+
+    logger.info("Worker Геннадия запущен")
+
+
+async def shutdown(ctx: dict) -> None:
+    await ctx["bot"].session.close()
+
+
+async def _send_and_log(
+    bot: Bot, session: AsyncSession, workspace: Workspace, text: str
+) -> None:
+    if len(text) > TG_LIMIT:
+        text = text[:TG_LIMIT] + "…"
+    sent = await bot.send_message(workspace.tg_chat_id, text)
+    await messages.save_assistant(session, workspace, text, tg_message_id=sent.message_id)
+
+
+async def _run_reminder(
+    bot: Bot, session: AsyncSession, task: ScheduledTask, workspace: Workspace
+) -> None:
+    payload = task.payload or {}
+    name = payload.get("user_name")
+    text = f"⏰ {name + ', н' if name else 'Н'}апоминание: {payload.get('text', '…')}"
+    await _send_and_log(bot, session, workspace, text)
+
+
+async def _run_agent_task(
+    bot: Bot, session: AsyncSession, task: ScheduledTask, workspace: Workspace
+) -> None:
+    """Пробуждение: LLM-ход с инструментами по сохранённой инструкции."""
+    over, spend, limit = await budget.check(session, workspace)
+    if over:
+        await _send_and_log(
+            bot,
+            session,
+            workspace,
+            f"⛔ Задача #{task.id} пропущена: месячный бюджет чата исчерпан "
+            f"(${spend:.2f} из ${limit:.2f}).",
+        )
+        return
+
+    payload = task.payload or {}
+    user = await session.get(User, task.user_id)
+    instruction = (
+        f"[Запланированная задача #{task.id}, поставил(а) "
+        f"{payload.get('user_name') or 'кто-то из чата'}. Выполни и напиши результат "
+        f"в чат.]\n{payload.get('text', '')}"
+    )
+    outcome = await llm_chat.generate_reply(
+        session, workspace, user, extra_user_message=instruction
+    )
+    text = outcome.text.strip() or "…"
+    sent = await send_rendered(bot, workspace.tg_chat_id, text)
+    saved = await messages.save_assistant(
+        session, workspace, text, tg_message_id=sent.message_id
+    )
+    await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id)
+
+    for image in outcome.attachments[:2]:
+        photo_msg = await bot.send_photo(
+            workspace.tg_chat_id, BufferedInputFile(image, filename="gennady.png")
+        )
+        await messages.save_assistant(
+            session, workspace, "[картинка]", tg_message_id=photo_msg.message_id
+        )
+
+
+async def check_due_tasks(ctx: dict) -> None:
+    """Sweeper: выполняет просроченные pending-задачи. Источник правды — БД."""
+    bot: Bot = ctx["bot"]
+    now = datetime.now(timezone.utc)
+
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(ScheduledTask, Workspace)
+                .join(Workspace, ScheduledTask.workspace_id == Workspace.id)
+                .where(
+                    ScheduledTask.status == "pending",
+                    ScheduledTask.run_at <= now,
+                )
+                .order_by(ScheduledTask.run_at)
+                .limit(20)
+            )
+        ).all()
+
+        for task, workspace in rows:
+            # Защита от повторного захвата, пока LLM-задача выполняется
+            task.status = "running"
+            await session.commit()
+
+            try:
+                if task.kind == "agent_task":
+                    await _run_agent_task(bot, session, task, workspace)
+                else:
+                    await _run_reminder(bot, session, task, workspace)
+
+                if task.cron:  # повторяющаяся — планируем следующий запуск
+                    task.run_at = reminders.next_run_from_cron(task.cron)
+                    task.status = "pending"
+                else:
+                    task.status = "done"
+                logger.info("Задача #%s (%s) выполнена", task.id, task.kind)
+            except Exception as exc:
+                logger.exception("Задача #%s упала", task.id)
+                task.status = "failed"
+                try:
+                    await _send_and_log(
+                        bot,
+                        session,
+                        workspace,
+                        f"⚠️ Задача #{task.id} не выполнилась: "
+                        f"{type(exc).__name__}: {str(exc)[:200]}",
+                    )
+                except Exception:
+                    logger.exception("Не смог сообщить об ошибке задачи #%s", task.id)
+
+            await session.commit()
+
+
+async def reindex_memory(ctx: dict) -> None:
+    """Доиндексация фактов, сохранённых без embedding (сбой/отсутствие API)."""
+    from app.db.models import MemoryEntry
+    from app.llm import embeddings
+
+    if not embeddings.available():
+        return
+
+    async with session_factory() as session:
+        entries = (
+            (
+                await session.execute(
+                    select(MemoryEntry)
+                    .where(
+                        MemoryEntry.embedding.is_(None),
+                        MemoryEntry.archived_at.is_(None),
+                    )
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        indexed = 0
+        for entry in entries:
+            try:
+                entry.embedding = await embeddings.embed(entry.content)
+                indexed += 1
+            except Exception as exc:  # noqa: BLE001 — API лежит, попробуем в следующий раз
+                logger.warning("Доиндексация факта #%s не удалась: %s", entry.id, exc)
+                break
+        await session.commit()
+    if indexed:
+        logger.info("Доиндексировано фактов: %s", indexed)
+
+
+async def compress_histories(ctx: dict) -> None:
+    """Ежечасное сжатие старой истории длинных чатов в сводку."""
+    from app.services import summaries
+
+    async with session_factory() as session:
+        workspaces = (await session.scalars(select(Workspace))).all()
+        for workspace in workspaces:
+            try:
+                if await summaries.compress_workspace(session, workspace):
+                    await session.commit()
+            except Exception:
+                logger.exception("Сжатие истории workspace %s упало", workspace.id)
+                await session.rollback()
+
+
+class WorkerSettings:
+    redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
+    on_startup = startup
+    on_shutdown = shutdown
+    health_check_interval = 60  # для healthcheck'а `arq --check` в compose
+    cron_jobs = [
+        cron(check_due_tasks, second={0, 20, 40}, run_at_startup=True),
+        cron(reindex_memory, minute={0, 15, 30, 45}, run_at_startup=True),
+        cron(compress_histories, minute={5}, run_at_startup=True),
+    ]

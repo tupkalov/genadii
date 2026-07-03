@@ -90,7 +90,9 @@ async def _run_agent_task(
     saved = await messages.save_assistant(
         session, workspace, text, tg_message_id=sent.message_id
     )
-    await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id)
+    await llm_chat.log_usages(
+        session, workspace, outcome.usages, message_id=saved.id, user_id=task.user_id
+    )
 
     for image in outcome.attachments[:2]:
         photo_msg = await bot.send_photo(
@@ -218,10 +220,9 @@ async def send_digests(ctx: dict) -> None:
             if user is None:
                 continue
             try:
-                text, usages = await digest.build_for_user(session, user)
+                text = await digest.build_for_user(session, user)
                 if text:
                     await send_rendered(bot, ws.tg_chat_id, text)
-                    await llm_chat.log_usages(session, ws, usages)
                 ws.settings = {**settings, "digest_last_date": today}
                 await session.commit()
                 logger.info("Дайджест отправлен пользователю %s", ws.tg_chat_id)

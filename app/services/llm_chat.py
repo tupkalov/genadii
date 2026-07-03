@@ -20,7 +20,7 @@ from app.tools import permissions
 from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
 
-MAX_TOOL_ITERATIONS = 5
+MAX_TOOL_ITERATIONS = 8  # исследовательские запросы могут делать много поисков подряд
 
 
 @dataclass
@@ -141,16 +141,20 @@ async def generate_reply(
         target_message_id=target_message_id,
     )
 
-    # Стриминг только при отсутствии картинок в ответе неважен — стримим всегда,
-    # когда дан on_delta; мультимодальный ход (vision) тоже поддерживает stream.
+    # Стриминг всегда, когда дан on_delta; мультимодальный ход тоже поддерживает stream.
     usages: list[client.LlmResult] = []
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for iteration in range(MAX_TOOL_ITERATIONS):
+        # На последней итерации убираем инструменты: модель обязана дать финальный
+        # ответ из уже собранного, а не звать очередной tool (иначе — фолбэк).
+        last = iteration == MAX_TOOL_ITERATIONS - 1
+        round_tools = None if last else tool_schemas
+
         if on_delta is not None:
             result = await client.chat_stream(
-                messages, model, tools=tool_schemas, on_delta=on_delta
+                messages, model, tools=round_tools, on_delta=on_delta
             )
         else:
-            result = await client.chat(messages, model, tools=tool_schemas)
+            result = await client.chat(messages, model, tools=round_tools)
         usages.append(result)
 
         if not result.tool_calls:
@@ -209,11 +213,13 @@ async def log_usages(
     workspace: Workspace,
     usages: list[client.LlmResult],
     message_id: int | None = None,
+    user_id: int | None = None,
 ) -> None:
     for result in usages:
         session.add(
             LlmUsage(
                 workspace_id=workspace.id,
+                user_id=user_id,
                 message_id=message_id,
                 model=result.model,
                 prompt_tokens=result.prompt_tokens,

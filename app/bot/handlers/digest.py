@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.formatting import send_rendered
 from app.db.models import User, Workspace, WorkspaceType
-from app.services import audit, digest, llm_chat, messages
+from app.services import audit, digest, messages
 
 router = Router(name="digest")
 
@@ -23,7 +23,7 @@ async def cmd_digest(
     command: CommandObject,
 ) -> None:
     if workspace.type != WorkspaceType.personal:
-        text = "Дайджест — личная штука. Настрой его в личке со мной: /digest 21:00"
+        text = "Отчёт расходов — личная штука. Настрой его в личке со мной: /digest 21:00"
         sent = await message.answer(text)
         await messages.save_assistant(session, workspace, text, tg_message_id=sent.message_id)
         return
@@ -31,14 +31,12 @@ async def cmd_digest(
     arg = (command.args or "").strip().lower()
 
     if arg == "now":
-        await message.bot.send_chat_action(message.chat.id, "typing")
-        text, usages = await digest.build_for_user(session, user)
+        text = await digest.build_for_user(session, user)
         if text is None:
-            await message.answer("За последние сутки в твоих группах тихо — нечего дайджестить. 🤷")
+            await message.answer("Пока нет чатов для отчёта. 🤷")
         else:
             sent = await send_rendered(message.bot, message.chat.id, text)
             await messages.save_assistant(session, workspace, text, tg_message_id=sent.message_id)
-            await llm_chat.log_usages(session, workspace, usages)
         return
 
     if arg in ("off", "0"):
@@ -55,11 +53,12 @@ async def cmd_digest(
                 session, action="digest_set", payload={"time": hhmm},
                 workspace_id=workspace.id, user_id=user.id,
             )
-            text = f"Буду присылать дайджест твоих групп каждый день в <b>{hhmm}</b>. 🌅"
+            text = f"Буду присылать отчёт расходов каждый день в <b>{hhmm}</b>. 💸"
     else:
         current = (workspace.settings or {}).get("digest_time")
         text = (
-            (f"🌅 Дайджест включён на <b>{current}</b>.\n" if current else "🌅 Дайджест выключен.\n")
+            (f"💸 Отчёт расходов включён на <b>{current}</b>.\n" if current else "💸 Отчёт расходов выключен.\n")
+            + "Показывает: кто в каком чате сколько потратил за сутки.\n"
             + "\n<code>/digest 21:00</code> — время, <code>/digest now</code> — прислать сейчас, "
             "<code>/digest off</code> — выключить."
         )

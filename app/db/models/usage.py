@@ -16,6 +16,10 @@ class LlmUsage(Base):
     workspace_id: Mapped[int] = mapped_column(
         ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
     )
+    # Кто инициировал вызов (для отчёта «кто сколько потратил»)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     message_id: Mapped[int | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL")
     )

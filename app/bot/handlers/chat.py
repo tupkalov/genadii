@@ -150,7 +150,7 @@ async def _generate_and_send(
     saved = await messages.save_assistant(
         session, workspace, text, tg_message_id=sent.message_id
     )
-    await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id)
+    await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id, user_id=user.id)
     await _send_attachments(message, workspace, session, outcome.attachments)
 
 
@@ -242,7 +242,7 @@ async def _maybe_proactive(
     saved = await messages.save_assistant(
         session, workspace, outcome.text.strip(), tg_message_id=sent.message_id
     )
-    await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id)
+    await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id, user_id=user.id)
 
 
 async def _photo_extra(message: Message, file_id: str) -> list[dict]:
@@ -388,7 +388,7 @@ async def on_voice(
         f"[голосовое] {transcript}",
         tg_message_id=message.message_id,
     )
-    await llm_chat.log_usages(session, workspace, [transcription], message_id=saved.id)
+    await llm_chat.log_usages(session, workspace, [transcription], message_id=saved.id, user_id=user.id)
 
     # Транскрипт уже в истории — дальше общий debounce-пайплайн
     _schedule_reply(message, user.id, workspace.id)

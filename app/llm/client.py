@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import time
@@ -8,6 +9,7 @@ from decimal import Decimal
 import httpx
 
 from app.config import get_settings
+from app.llm.retry import BACKOFF_SECONDS, RETRIES, request_with_retry
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -47,19 +49,26 @@ async def chat(
         body["tools"] = tools
 
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=90) as client:
-        response = await client.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "X-Title": "Smart Gennady",
-            },
-            json=body,
-        )
-    latency_ms = int((time.monotonic() - started) * 1000)
+    async with httpx.AsyncClient(timeout=90) as http_client:
+        async def _do_request() -> httpx.Response:
+            return await http_client.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "X-Title": "Smart Gennady",
+                },
+                json=body,
+            )
 
-    if response.status_code != 200:
-        raise LlmError(f"OpenRouter {response.status_code}: {response.text[:300]}")
+        try:
+            response = await request_with_retry(_do_request)
+        except httpx.HTTPStatusError as exc:
+            raise LlmError(
+                f"OpenRouter {exc.response.status_code}: {exc.response.text[:300]}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise LlmError(f"OpenRouter недоступен: {exc}") from exc
+    latency_ms = int((time.monotonic() - started) * 1000)
 
     data = response.json()
     try:
@@ -117,52 +126,66 @@ async def chat_stream(
     if tools:
         body["tools"] = tools
 
-    content_parts: list[str] = []
-    tool_acc: dict[int, dict] = {}
-    usage: dict = {}
-    resolved_model = model
     started = time.monotonic()
+    last_error: Exception | None = None
 
-    async with httpx.AsyncClient(timeout=180) as http_client:
-        async with http_client.stream(
-            "POST",
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "X-Title": "Smart Gennady",
-            },
-            json=body,
-        ) as response:
-            if response.status_code != 200:
-                text = (await response.aread()).decode(errors="replace")
-                raise LlmError(f"OpenRouter {response.status_code}: {text[:300]}")
+    # Ретраим только если сбой случился ДО первого куска в on_delta — иначе
+    # повтор задублирует/испортит уже частично отправленное сообщение.
+    for attempt in range(RETRIES):
+        content_parts: list[str] = []
+        tool_acc: dict[int, dict] = {}
+        usage: dict = {}
+        resolved_model = model
 
-            async for line in response.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                payload = line[6:].strip()
-                if payload == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
+        try:
+            async with httpx.AsyncClient(timeout=180) as http_client:
+                async with http_client.stream(
+                    "POST",
+                    OPENROUTER_URL,
+                    headers={
+                        "Authorization": f"Bearer {settings.openrouter_api_key}",
+                        "X-Title": "Smart Gennady",
+                    },
+                    json=body,
+                ) as response:
+                    if response.status_code != 200:
+                        text = (await response.aread()).decode(errors="replace")
+                        raise LlmError(f"OpenRouter {response.status_code}: {text[:300]}")
 
-                if chunk.get("usage"):
-                    usage = chunk["usage"]
-                if chunk.get("model"):
-                    resolved_model = chunk["model"]
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[6:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
 
-                choices = chunk.get("choices") or []
-                if not choices:
-                    continue
-                delta = choices[0].get("delta") or {}
-                if delta.get("content"):
-                    content_parts.append(delta["content"])
-                    if on_delta:
-                        on_delta("".join(content_parts))
-                if delta.get("tool_calls"):
-                    _merge_tool_call_deltas(tool_acc, delta["tool_calls"])
+                        if chunk.get("usage"):
+                            usage = chunk["usage"]
+                        if chunk.get("model"):
+                            resolved_model = chunk["model"]
+
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        if delta.get("content"):
+                            content_parts.append(delta["content"])
+                            if on_delta:
+                                on_delta("".join(content_parts))
+                        if delta.get("tool_calls"):
+                            _merge_tool_call_deltas(tool_acc, delta["tool_calls"])
+            break
+        except (LlmError, httpx.HTTPError) as exc:
+            last_error = exc
+            if content_parts or attempt == RETRIES - 1:
+                if isinstance(exc, LlmError):
+                    raise
+                raise LlmError(f"OpenRouter недоступен: {exc}") from exc
+            await asyncio.sleep(BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)])
 
     latency_ms = int((time.monotonic() - started) * 1000)
     tool_calls = [tool_acc[i] for i in sorted(tool_acc)]
@@ -202,24 +225,31 @@ async def generate_image(prompt: str, model: str) -> LlmResult:
         raise LlmError("OPENROUTER_API_KEY не задан")
 
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "X-Title": "Smart Gennady",
-            },
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "modalities": ["image", "text"],
-                "usage": {"include": True},
-            },
-        )
-    latency_ms = int((time.monotonic() - started) * 1000)
+    async with httpx.AsyncClient(timeout=120) as http_client:
+        async def _do_request() -> httpx.Response:
+            return await http_client.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "X-Title": "Smart Gennady",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "modalities": ["image", "text"],
+                    "usage": {"include": True},
+                },
+            )
 
-    if response.status_code != 200:
-        raise LlmError(f"OpenRouter {response.status_code}: {response.text[:300]}")
+        try:
+            response = await request_with_retry(_do_request)
+        except httpx.HTTPStatusError as exc:
+            raise LlmError(
+                f"OpenRouter {exc.response.status_code}: {exc.response.text[:300]}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise LlmError(f"OpenRouter недоступен: {exc}") from exc
+    latency_ms = int((time.monotonic() - started) * 1000)
 
     data = response.json()
     try:

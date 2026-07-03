@@ -12,7 +12,8 @@ from app.bot.formatting import send_rendered
 from app.config import get_settings
 from app.db.models import ScheduledTask, User, Workspace
 from app.db.session import session_factory
-from app.services import budget, llm_chat, messages, reminders
+from app.llm.client import LlmError
+from app.services import alerts, budget, llm_chat, messages, reminders
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gennady.worker")
@@ -142,6 +143,8 @@ async def check_due_tasks(ctx: dict) -> None:
             except Exception as exc:
                 logger.exception("Задача #%s упала", task.id)
                 task.status = "failed"
+                if isinstance(exc, LlmError):
+                    await alerts.record_llm_failure(bot)
                 try:
                     await _send_and_log(
                         bot,
@@ -164,32 +167,38 @@ async def reindex_memory(ctx: dict) -> None:
     if not embeddings.available():
         return
 
-    async with session_factory() as session:
-        entries = (
-            (
-                await session.execute(
-                    select(MemoryEntry)
-                    .where(
-                        MemoryEntry.embedding.is_(None),
-                        MemoryEntry.archived_at.is_(None),
+    try:
+        async with session_factory() as session:
+            entries = (
+                (
+                    await session.execute(
+                        select(MemoryEntry)
+                        .where(
+                            MemoryEntry.embedding.is_(None),
+                            MemoryEntry.archived_at.is_(None),
+                        )
+                        .limit(20)
                     )
-                    .limit(20)
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
+            indexed = 0
+            for entry in entries:
+                try:
+                    entry.embedding = await embeddings.embed(entry.content)
+                    indexed += 1
+                except Exception as exc:  # noqa: BLE001 — API лежит, попробуем в следующий раз
+                    logger.warning("Доиндексация факта #%s не удалась: %s", entry.id, exc)
+                    break
+            await session.commit()
+        if indexed:
+            logger.info("Доиндексировано фактов: %s", indexed)
+    except Exception as exc:
+        logger.exception("Cron reindex_memory упал целиком")
+        await alerts.notify_admins(
+            ctx["bot"], f"⚠️ Cron reindex_memory упал: {exc}", kind="cron:reindex_memory"
         )
-        indexed = 0
-        for entry in entries:
-            try:
-                entry.embedding = await embeddings.embed(entry.content)
-                indexed += 1
-            except Exception as exc:  # noqa: BLE001 — API лежит, попробуем в следующий раз
-                logger.warning("Доиндексация факта #%s не удалась: %s", entry.id, exc)
-                break
-        await session.commit()
-    if indexed:
-        logger.info("Доиндексировано фактов: %s", indexed)
 
 
 async def send_digests(ctx: dict) -> None:
@@ -204,46 +213,61 @@ async def send_digests(ctx: dict) -> None:
     hhmm = now.strftime("%H:%M")
     today = now.date().isoformat()
 
-    async with session_factory() as session:
-        personals = (
-            await session.scalars(
-                select(Workspace).where(Workspace.type == WorkspaceType.personal)
-            )
-        ).all()
-        for ws in personals:
-            settings = ws.settings or {}
-            if settings.get("digest_time") != hhmm or settings.get("digest_last_date") == today:
-                continue
-            user = await session.scalar(
-                select(User).where(User.tg_id == ws.tg_chat_id)
-            )
-            if user is None:
-                continue
-            try:
-                text = await digest.build_for_user(session, user)
-                if text:
-                    await send_rendered(bot, ws.tg_chat_id, text)
-                ws.settings = {**settings, "digest_last_date": today}
-                await session.commit()
-                logger.info("Дайджест отправлен пользователю %s", ws.tg_chat_id)
-            except Exception:
-                logger.exception("Дайджест для %s упал", ws.tg_chat_id)
-                await session.rollback()
+    try:
+        async with session_factory() as session:
+            personals = (
+                await session.scalars(
+                    select(Workspace).where(Workspace.type == WorkspaceType.personal)
+                )
+            ).all()
+            for ws in personals:
+                settings = ws.settings or {}
+                if (
+                    settings.get("digest_time") != hhmm
+                    or settings.get("digest_last_date") == today
+                ):
+                    continue
+                user = await session.scalar(
+                    select(User).where(User.tg_id == ws.tg_chat_id)
+                )
+                if user is None:
+                    continue
+                try:
+                    text = await digest.build_for_user(session, user)
+                    if text:
+                        await send_rendered(bot, ws.tg_chat_id, text)
+                    ws.settings = {**settings, "digest_last_date": today}
+                    await session.commit()
+                    logger.info("Дайджест отправлен пользователю %s", ws.tg_chat_id)
+                except Exception:
+                    logger.exception("Дайджест для %s упал", ws.tg_chat_id)
+                    await session.rollback()
+    except Exception as exc:
+        logger.exception("Cron send_digests упал целиком")
+        await alerts.notify_admins(
+            bot, f"⚠️ Cron send_digests упал: {exc}", kind="cron:send_digests"
+        )
 
 
 async def compress_histories(ctx: dict) -> None:
     """Ежечасное сжатие старой истории длинных чатов в сводку."""
     from app.services import summaries
 
-    async with session_factory() as session:
-        workspaces = (await session.scalars(select(Workspace))).all()
-        for workspace in workspaces:
-            try:
-                if await summaries.compress_workspace(session, workspace):
-                    await session.commit()
-            except Exception:
-                logger.exception("Сжатие истории workspace %s упало", workspace.id)
-                await session.rollback()
+    try:
+        async with session_factory() as session:
+            workspaces = (await session.scalars(select(Workspace))).all()
+            for workspace in workspaces:
+                try:
+                    if await summaries.compress_workspace(session, workspace):
+                        await session.commit()
+                except Exception:
+                    logger.exception("Сжатие истории workspace %s упало", workspace.id)
+                    await session.rollback()
+    except Exception as exc:
+        logger.exception("Cron compress_histories упал целиком")
+        await alerts.notify_admins(
+            ctx["bot"], f"⚠️ Cron compress_histories упал: {exc}", kind="cron:compress_histories"
+        )
 
 
 class WorkerSettings:

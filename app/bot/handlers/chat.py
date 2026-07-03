@@ -16,7 +16,7 @@ from app.db.models import User, Workspace, WorkspaceType
 from app.db.session import session_factory
 from app.llm import client
 from app.llm.client import LlmError
-from app.services import budget, documents, llm_chat, messages
+from app.services import alerts, budget, documents, llm_chat, messages
 
 _redis = Redis.from_url(get_settings().redis_url)
 
@@ -132,6 +132,7 @@ async def _generate_and_send(
         )
     except LlmError as exc:
         logger.error("LLM error (workspace=%s): %s", workspace.id, exc)
+        await alerts.record_llm_failure(message.bot)
         reply = NO_KEY_REPLY if "OPENROUTER_API_KEY" in str(exc) else ERROR_REPLY
         if editor is not None:
             await edit_rendered(editor.placeholder, reply)
@@ -377,6 +378,7 @@ async def on_voice(
         )
     except LlmError as exc:
         logger.error("Transcribe error (workspace=%s): %s", workspace.id, exc)
+        await alerts.record_llm_failure(message.bot)
         await message.answer("🎙 Не расслышал — не смог распознать голосовое. Попробуй ещё раз.")
         return
 

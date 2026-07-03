@@ -22,6 +22,7 @@ from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
 
 MAX_TOOL_ITERATIONS = 8  # исследовательские запросы могут делать много поисков подряд
+ESCALATE_AFTER_ITERATIONS = 3  # если зациклились на инструментах — берём модель посильнее
 
 # Некоторые модели при сбое function-calling вместо структурированного tool_calls
 # пишут псевдо-вызов инструмента прямо в текст ответа (спецтокены вида <｜tool...｜>,
@@ -104,7 +105,8 @@ async def _build_messages(
     if summary:
         system += f"\n\nСводка более ранней части беседы:\n{summary}"
 
-    facts = await memory.list_facts(session, workspace)
+    query_text = extra_user_message if isinstance(extra_user_message, str) else None
+    facts = await memory.list_facts(session, workspace, query_text=query_text)
     if facts:
         system += "\n\nФакты из долгой памяти этого чата:\n" + "\n".join(
             f"- {f.content}" for f in facts
@@ -142,7 +144,14 @@ async def generate_reply(
     """
     tools = await permissions.enabled_tools(session, workspace)
     messages = await _build_messages(session, workspace, extra_user_message, tools, user)
-    model = pick_model(workspace, multimodal=isinstance(extra_user_message, list))
+    is_multimodal = isinstance(extra_user_message, list)
+    model = pick_model(workspace, multimodal=is_multimodal)
+    # Эскалация на smart-модель при зацикливании: не трогаем мультимодальные
+    # ходы (там нужна именно vision-модель) и явный оверрайд пользователя.
+    can_escalate = not is_multimodal and not (workspace.settings or {}).get(
+        "model_override"
+    )
+    smart_model = get_settings().smart_model
 
     tool_schemas = [t.to_openrouter() for t in tools] or None
     ctx = ToolContext(
@@ -161,13 +170,16 @@ async def generate_reply(
         # ответ из уже собранного, а не звать очередной tool (иначе — фолбэк).
         last = iteration == MAX_TOOL_ITERATIONS - 1
         round_tools = None if last else tool_schemas
+        round_model = (
+            smart_model if can_escalate and iteration >= ESCALATE_AFTER_ITERATIONS else model
+        )
 
         if on_delta is not None:
             result = await client.chat_stream(
-                messages, model, tools=round_tools, on_delta=on_delta
+                messages, round_model, tools=round_tools, on_delta=on_delta
             )
         else:
-            result = await client.chat(messages, model, tools=round_tools)
+            result = await client.chat(messages, round_model, tools=round_tools)
         usages.append(result)
 
         if not result.tool_calls:

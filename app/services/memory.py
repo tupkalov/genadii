@@ -9,6 +9,7 @@ from app.llm import embeddings
 logger = logging.getLogger("gennady.memory")
 
 PROMPT_FACTS_LIMIT = 25  # сколько последних фактов инлайним в system prompt
+DEDUP_THRESHOLD = 0.15  # cosine distance (~0.85 схожести) — считаем факт дублем
 
 
 async def add_fact(
@@ -21,6 +22,25 @@ async def add_fact(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Embedding не получился, факт сохраняю без него: %s", exc)
         embedding = None
+
+    if embedding is not None:
+        # Supersede: похожий факт архивируем, новый сохраняем как актуальную версию
+        # (например «др Аси 5 мая» -> «др Аси 6 мая» — не копим противоречивые дубли).
+        rows = (
+            await session.execute(
+                select(MemoryEntry, MemoryEntry.embedding.cosine_distance(embedding))
+                .where(
+                    MemoryEntry.workspace_id == workspace.id,
+                    MemoryEntry.archived_at.is_(None),
+                    MemoryEntry.embedding.isnot(None),
+                )
+                .order_by(MemoryEntry.embedding.cosine_distance(embedding))
+                .limit(5)
+            )
+        ).all()
+        for dup, distance in rows:
+            if distance <= DEDUP_THRESHOLD:
+                await archive_fact(session, workspace, dup.id)
 
     entry = MemoryEntry(
         workspace_id=workspace.id,
@@ -35,18 +55,36 @@ async def add_fact(
 
 
 async def list_facts(
-    session: AsyncSession, workspace: Workspace, limit: int = PROMPT_FACTS_LIMIT
+    session: AsyncSession,
+    workspace: Workspace,
+    limit: int = PROMPT_FACTS_LIMIT,
+    query_text: str | None = None,
 ) -> list[MemoryEntry]:
+    """Факты для system prompt: по умолчанию recency, а с query_text — релевантность
+    текущему сообщению (доп. embedding-вызов, пропускаем его при пустой памяти)."""
+    base_filter = (
+        MemoryEntry.workspace_id == workspace.id,
+        MemoryEntry.archived_at.is_(None),
+    )
+
+    query_vector = None
+    if query_text:
+        has_any = await session.scalar(select(MemoryEntry.id).where(*base_filter).limit(1))
+        if has_any is not None:
+            try:
+                query_vector = await embeddings.embed(query_text)
+            except Exception as exc:  # noqa: BLE001 — деградируем до recency
+                logger.warning("Embedding запроса для ранжирования памяти не получился: %s", exc)
+
+    order = (
+        MemoryEntry.embedding.cosine_distance(query_vector).nulls_last()
+        if query_vector is not None
+        else MemoryEntry.id.desc()
+    )
     return list(
         (
             await session.execute(
-                select(MemoryEntry)
-                .where(
-                    MemoryEntry.workspace_id == workspace.id,
-                    MemoryEntry.archived_at.is_(None),
-                )
-                .order_by(MemoryEntry.id.desc())
-                .limit(limit)
+                select(MemoryEntry).where(*base_filter).order_by(order).limit(limit)
             )
         )
         .scalars()

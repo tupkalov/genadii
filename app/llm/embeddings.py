@@ -1,13 +1,9 @@
-import asyncio
-
 import httpx
 
 from app.config import get_settings
+from app.llm.retry import request_with_retry
 
 OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings"
-
-RETRIES = 3
-BACKOFF_SECONDS = (0.5, 2.0)
 
 
 def available() -> bool:
@@ -25,26 +21,16 @@ async def embed(text: str) -> list[float] | None:
     if not settings.openrouter_api_key:
         return None
 
-    last_error: Exception | None = None
-    for attempt in range(RETRIES):
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    OPENROUTER_EMBEDDINGS_URL,
-                    headers={
-                        "Authorization": f"Bearer {settings.openrouter_api_key}",
-                        "X-Title": "Smart Gennady",
-                    },
-                    json={"model": settings.embedding_model, "input": text[:8000]},
-                )
-            response.raise_for_status()
-            return response.json()["data"][0]["embedding"]
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code < 500:
-                raise  # 4xx — ретраить бессмысленно
-            last_error = exc
-        except httpx.HTTPError as exc:
-            last_error = exc
-        if attempt < RETRIES - 1:
-            await asyncio.sleep(BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)])
-    raise last_error
+    async def _do_request() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=30) as client:
+            return await client.post(
+                OPENROUTER_EMBEDDINGS_URL,
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "X-Title": "Smart Gennady",
+                },
+                json={"model": settings.embedding_model, "input": text[:8000]},
+            )
+
+    response = await request_with_retry(_do_request)
+    return response.json()["data"][0]["embedding"]

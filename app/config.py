@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # LLM (Milestone 3)
     openrouter_api_key: str = ""
     default_model: str = "deepseek/deepseek-chat"
+    # Эскалация при зацикливании на инструментах (Ит.10) — reasoning-версия
+    # того же класса, не топовый флагман
+    smart_model: str = "deepseek/deepseek-reasoner"
     history_limit: int = 30  # сколько последних сообщений чата отдаём в контекст
     # Пауза после последнего сообщения перед ответом: серия сообщений/форвардов
     # получает один общий ответ вместо ответа на каждое

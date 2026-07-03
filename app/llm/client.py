@@ -1,5 +1,7 @@
 import base64
+import json
 import time
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -75,6 +77,109 @@ async def chat(
         latency_ms=latency_ms,
         tool_calls=message.get("tool_calls") or [],
         raw_message=message,
+    )
+
+
+def _merge_tool_call_deltas(acc: dict[int, dict], deltas: list[dict]) -> None:
+    """Собирает tool_calls из потоковых фрагментов (приходят по index)."""
+    for d in deltas:
+        idx = d.get("index", 0)
+        slot = acc.setdefault(
+            idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+        )
+        if d.get("id"):
+            slot["id"] = d["id"]
+        fn = d.get("function") or {}
+        if fn.get("name"):
+            slot["function"]["name"] = fn["name"]
+        if fn.get("arguments"):
+            slot["function"]["arguments"] += fn["arguments"]
+
+
+async def chat_stream(
+    messages: list[dict],
+    model: str,
+    tools: list[dict] | None,
+    on_delta: Callable[[str], None] | None = None,
+) -> LlmResult:
+    """Потоковый вызов: on_delta зовётся на каждый кусок текста; финал — LlmResult
+    (с накопленными content/tool_calls/usage)."""
+    settings = get_settings()
+    if not settings.openrouter_api_key:
+        raise LlmError("OPENROUTER_API_KEY не задан")
+
+    body: dict = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "usage": {"include": True},
+    }
+    if tools:
+        body["tools"] = tools
+
+    content_parts: list[str] = []
+    tool_acc: dict[int, dict] = {}
+    usage: dict = {}
+    resolved_model = model
+    started = time.monotonic()
+
+    async with httpx.AsyncClient(timeout=180) as http_client:
+        async with http_client.stream(
+            "POST",
+            OPENROUTER_URL,
+            headers={
+                "Authorization": f"Bearer {settings.openrouter_api_key}",
+                "X-Title": "Smart Gennady",
+            },
+            json=body,
+        ) as response:
+            if response.status_code != 200:
+                text = (await response.aread()).decode(errors="replace")
+                raise LlmError(f"OpenRouter {response.status_code}: {text[:300]}")
+
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
+                if chunk.get("model"):
+                    resolved_model = chunk["model"]
+
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+                    if on_delta:
+                        on_delta("".join(content_parts))
+                if delta.get("tool_calls"):
+                    _merge_tool_call_deltas(tool_acc, delta["tool_calls"])
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    tool_calls = [tool_acc[i] for i in sorted(tool_acc)]
+    content = "".join(content_parts)
+    raw_message: dict = {"role": "assistant", "content": content or None}
+    if tool_calls:
+        raw_message["tool_calls"] = tool_calls
+
+    return LlmResult(
+        content=content,
+        model=resolved_model,
+        prompt_tokens=usage.get("prompt_tokens", 0),
+        completion_tokens=usage.get("completion_tokens", 0),
+        cost_usd=Decimal(str(usage.get("cost", 0))),
+        latency_ms=latency_ms,
+        tool_calls=tool_calls,
+        raw_message=raw_message,
     )
 
 

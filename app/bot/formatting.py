@@ -61,3 +61,17 @@ async def send_rendered(bot: Bot, chat_id: int, text: str) -> Message:
         return await bot.send_message(chat_id, md_to_html(text), parse_mode="HTML")
     except TelegramBadRequest:
         return await bot.send_message(chat_id, text, parse_mode=None)
+
+
+async def edit_rendered(message: Message, text: str) -> None:
+    """Финальное редактирование стримингового сообщения — с markdown-рендерингом."""
+    text = _truncate(text)
+    try:
+        await message.edit_text(md_to_html(text), parse_mode="HTML")
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            return
+        try:
+            await message.edit_text(text, parse_mode=None)
+        except TelegramBadRequest:
+            pass

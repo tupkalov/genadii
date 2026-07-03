@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 20  # мягкий лимит сообщений на пользователя, 0 = выкл
     proactive_cooldown: int = 300  # мин. пауза между проактивными репликами в чате, сек
 
+    stream_responses: bool = True  # печатать ответ постепенно (правка сообщения)
+    stream_edit_interval: float = 1.7  # как часто править сообщение при стриминге, сек
+
     # Мультимодальность (Итерация 2): дефолт не умеет картинки/аудио,
     # для них подключаются отдельные модели
     vision_model: str = "google/gemini-2.5-flash"

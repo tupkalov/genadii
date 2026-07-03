@@ -93,6 +93,7 @@ async def generate_reply(
     bot: object | None = None,
     chat_id: int | None = None,
     target_message_id: int | None = None,
+    on_delta=None,
 ) -> ChatOutcome:
     """Контекст + tool-calling цикл. Входящее сообщение уже в истории.
 
@@ -114,9 +115,16 @@ async def generate_reply(
         target_message_id=target_message_id,
     )
 
+    # Стриминг только при отсутствии картинок в ответе неважен — стримим всегда,
+    # когда дан on_delta; мультимодальный ход (vision) тоже поддерживает stream.
     usages: list[client.LlmResult] = []
     for _ in range(MAX_TOOL_ITERATIONS):
-        result = await client.chat(messages, model, tools=tool_schemas)
+        if on_delta is not None:
+            result = await client.chat_stream(
+                messages, model, tools=tool_schemas, on_delta=on_delta
+            )
+        else:
+            result = await client.chat(messages, model, tools=tool_schemas)
         usages.append(result)
 
         if not result.tool_calls:

@@ -27,6 +27,18 @@ def forward_label(origin: MessageOrigin | None) -> str | None:
     return None
 
 
+def _decorate(tg_message: TgMessage, content: str) -> str:
+    """Добавляет к тексту метки цитаты и пересылки, чтобы модель их учитывала."""
+    # Telegram-цитата: пользователь выделил конкретный фрагмент при ответе
+    quote = getattr(tg_message, "quote", None)
+    if quote and quote.text:
+        content = f"[обращает внимание на цитату: «{quote.text}»]\n{content}"
+    label = forward_label(tg_message.forward_origin)
+    if label:
+        content = f"[переслано от {label}]\n{content}"
+    return content
+
+
 async def save_incoming(
     session: AsyncSession, workspace: Workspace, user: User, tg_message: TgMessage
 ) -> Message | None:
@@ -36,10 +48,7 @@ async def save_incoming(
     if not content:
         return None
 
-    label = forward_label(tg_message.forward_origin)
-    if label:
-        content = f"[переслано от {label}]\n{content}"
-
+    content = _decorate(tg_message, content)
     return await save_user_text(
         session, workspace, user, content, tg_message_id=tg_message.message_id
     )
@@ -71,9 +80,7 @@ async def update_edited(
     content = tg_message.text or tg_message.caption
     if not content:
         return None
-    label = forward_label(tg_message.forward_origin)
-    if label:
-        content = f"[переслано от {label}]\n{content}"
+    content = _decorate(tg_message, content)
 
     message = await session.scalar(
         select(Message).where(

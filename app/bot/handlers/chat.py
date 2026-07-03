@@ -245,6 +245,19 @@ async def _maybe_proactive(
     await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id)
 
 
+async def _photo_extra(message: Message, file_id: str) -> list[dict]:
+    """Скачивает фото и оформляет как мультимодальную часть для vision-модели."""
+    file = await message.bot.download(file_id)
+    encoded = base64.b64encode(file.read()).decode()
+    return [
+        {"type": "text", "text": "Изображение из сообщения:"},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
+        },
+    ]
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def on_text(
     message: Message,
@@ -260,7 +273,14 @@ async def on_text(
     ):
         await _maybe_proactive(message, user, workspace, session)
         return
-    _schedule_reply(message, user.id, workspace.id)
+
+    # Ответ на фото + обращение к боту → подтягиваем то фото в vision-контекст
+    extras = None
+    reply = message.reply_to_message
+    if reply and reply.photo:
+        extras = await _photo_extra(message, reply.photo[-1].file_id)
+
+    _schedule_reply(message, user.id, workspace.id, extras=extras)
 
 
 @router.message(F.photo)
@@ -271,21 +291,15 @@ async def on_photo(
     session: AsyncSession,
     bot_username: str,
 ) -> None:
-    # «[фото] подпись» уже в истории (middleware); отвечаем только адресату
+    # «[фото] подпись» уже в истории (middleware); отвечаем только адресату.
+    # Без подписи в группе бот молчит, но фото уже в истории — можно ответить
+    # позже, зареплаив на него с обращением к боту.
     if workspace.type == WorkspaceType.group and not _addressed_to_bot(
         message, bot_username
     ):
         return
 
-    file = await message.bot.download(message.photo[-1].file_id)
-    encoded = base64.b64encode(file.read()).decode()
-    extras = [
-        {"type": "text", "text": "Фото из сообщения выше:"},
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
-        },
-    ]
+    extras = await _photo_extra(message, message.photo[-1].file_id)
     _schedule_reply(message, user.id, workspace.id, extras=extras)
 
 

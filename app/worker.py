@@ -190,6 +190,46 @@ async def reindex_memory(ctx: dict) -> None:
         logger.info("Доиндексировано фактов: %s", indexed)
 
 
+async def send_digests(ctx: dict) -> None:
+    """Раз в минуту: рассылает дайджест пользователям, у кого настал их час."""
+    from zoneinfo import ZoneInfo
+
+    from app.db.models import User, WorkspaceType
+    from app.services import digest
+
+    bot: Bot = ctx["bot"]
+    now = datetime.now(ZoneInfo(get_settings().timezone))
+    hhmm = now.strftime("%H:%M")
+    today = now.date().isoformat()
+
+    async with session_factory() as session:
+        personals = (
+            await session.scalars(
+                select(Workspace).where(Workspace.type == WorkspaceType.personal)
+            )
+        ).all()
+        for ws in personals:
+            settings = ws.settings or {}
+            if settings.get("digest_time") != hhmm or settings.get("digest_last_date") == today:
+                continue
+            user = await session.scalar(
+                select(User).where(User.tg_id == ws.tg_chat_id)
+            )
+            if user is None:
+                continue
+            try:
+                text, usages = await digest.build_for_user(session, user)
+                if text:
+                    await send_rendered(bot, ws.tg_chat_id, text)
+                    await llm_chat.log_usages(session, ws, usages)
+                ws.settings = {**settings, "digest_last_date": today}
+                await session.commit()
+                logger.info("Дайджест отправлен пользователю %s", ws.tg_chat_id)
+            except Exception:
+                logger.exception("Дайджест для %s упал", ws.tg_chat_id)
+                await session.rollback()
+
+
 async def compress_histories(ctx: dict) -> None:
     """Ежечасное сжатие старой истории длинных чатов в сводку."""
     from app.services import summaries
@@ -214,4 +254,5 @@ class WorkerSettings:
         cron(check_due_tasks, second={0, 20, 40}, run_at_startup=True),
         cron(reindex_memory, minute={0, 15, 30, 45}, run_at_startup=True),
         cron(compress_histories, minute={5}, run_at_startup=True),
+        cron(send_digests, second={0}),  # ежеминутная проверка времени дайджестов
     ]

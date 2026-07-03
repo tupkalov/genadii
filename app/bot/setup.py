@@ -8,6 +8,7 @@ from app.bot.handlers import (
     admin,
     budget,
     chat,
+    digest,
     memory,
     model,
     persona,
@@ -69,6 +70,7 @@ def create_dispatcher(session_factory: async_sessionmaker) -> Dispatcher:
     dp.include_router(budget.router)
     dp.include_router(scripts.router)
     dp.include_router(proactive.router)
+    dp.include_router(digest.router)
     dp.include_router(chat.router)  # catch-all — всегда последним
 
     dp.include_router(service.edited_router)

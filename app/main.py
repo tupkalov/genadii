@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from fastapi import FastAPI
 
-from app.api.routes import health, logs, stats
+from app.api.routes import dashboard, health, logs, stats
 from app.bot.commands import setup_bot_commands
 from app.bot.setup import create_dispatcher
 from app.config import get_settings
@@ -58,3 +58,4 @@ app = FastAPI(title="Умный Геннадий", lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(stats.router)
 app.include_router(logs.router)
+app.include_router(dashboard.router)

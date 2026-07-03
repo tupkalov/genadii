@@ -68,4 +68,4 @@ docker compose logs -f app
 - [x] Итерация 5 (живость) — авто-память, эмодзи-реакции (tool `react`), проактивность (`/proactive N%`)
 - [x] Итерация 6 (UX) — стриминг ответов, документы PDF/DOCX/TXT
 - [x] Итерация 7 (обзорность) — дайджест-отчёт расходов в личку (`/digest 21:00|now|off`, кто/где/сколько), веб-дашборд на `localhost:8000/`
-- [x] Итерация 8 (безопасность) — защита от prompt-injection (внешний контент помечен как данные), rate-limit дорогих tools (generate_image 15/ч, run_python/web_search 40/ч на юзера), песочница без интернета (`sandbox_net internal`), ручная валидация редиректов в fetch_url (SSRF), лимит длины факта
+- [x] Итерация 8 (безопасность) — защита от prompt-injection (внешний контент помечен как данные), rate-limit дорогих tools (generate_image 15/ч, run_python/web_search 40/ч на юзера), ручная валидация редиректов в fetch_url (SSRF), лимит длины факта

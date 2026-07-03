@@ -120,8 +120,4 @@ volumes:
   pgdata:
 
 networks:
-  # internal: у песочницы нет выхода в интернет (защита от SSRF в облачные
-  # metadata/внутренние сервисы). app/worker берут интернет из сети default.
-  # Чтобы вернуть песочнице публичный интернет — убери `internal: true`.
   sandbox_net:
-    internal: true

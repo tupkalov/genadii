@@ -3,7 +3,15 @@ import random
 import pytest
 from sqlalchemy import delete
 
-from app.db.models import MemoryEntry, SavedScript, User, Workspace, WorkspaceType
+from app.db.models import (
+    MemoryEntry,
+    Message,
+    SavedScript,
+    ScheduledTask,
+    User,
+    Workspace,
+    WorkspaceType,
+)
 from app.db.session import session_factory
 
 
@@ -52,6 +60,8 @@ async def user(session):
     # Порядок финализации fixture'ов не гарантирован (user не зависит от
     # workspace) — чистим ссылающиеся строки здесь тоже, чтобы не словить
     # FK-violation независимо от того, что финализируется раньше.
+    await session.execute(delete(Message).where(Message.user_id == u.id))
+    await session.execute(delete(ScheduledTask).where(ScheduledTask.user_id == u.id))
     await session.execute(delete(SavedScript).where(SavedScript.created_by_id == u.id))
     await session.execute(delete(MemoryEntry).where(MemoryEntry.created_by_id == u.id))
     await session.execute(delete(User).where(User.id == u.id))

@@ -9,12 +9,14 @@ from app.bot.handlers import (
     budget,
     chat,
     digest,
+    history_edit,
     memory,
     model,
     persona,
     proactive,
     reminders,
     scripts,
+    search,
     service,
     start,
     stats,
@@ -55,6 +57,11 @@ def create_dispatcher(session_factory: async_sessionmaker) -> Dispatcher:
     dp.edited_message.outer_middleware(_mark_skip_save)
     dp.edited_message.outer_middleware(workspace_mw)
 
+    # callback_query: тот же whitelist и workspace, без throttle (низкий объём)
+    dp.callback_query.outer_middleware(db_mw)
+    dp.callback_query.outer_middleware(auth_mw)
+    dp.callback_query.outer_middleware(workspace_mw)
+
     dp.errors.register(on_error)
 
     dp.include_router(service.message_router)  # миграция чата — до catch-all
@@ -71,6 +78,8 @@ def create_dispatcher(session_factory: async_sessionmaker) -> Dispatcher:
     dp.include_router(scripts.router)
     dp.include_router(proactive.router)
     dp.include_router(digest.router)
+    dp.include_router(history_edit.router)
+    dp.include_router(search.router)
     dp.include_router(chat.router)  # catch-all — всегда последним
 
     dp.include_router(service.edited_router)

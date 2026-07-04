@@ -1,3 +1,5 @@
+import html
+
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, MessageOriginHiddenUser, MessageOriginUser
@@ -25,7 +27,7 @@ def _target_tg(
             return origin.sender_user.id, origin.sender_user.username, None
         if isinstance(origin, MessageOriginHiddenUser):
             return None, None, (
-                f"У «{origin.sender_user_name}» аккаунт скрыт при пересылке — "
+                f"У «{html.escape(origin.sender_user_name)}» аккаунт скрыт при пересылке — "
                 "Telegram не отдаёт его ID. Пусть напишет мне сам или пришли ID числом."
             )
         if reply.from_user and not reply.from_user.is_bot:
@@ -153,7 +155,8 @@ async def cmd_users(
     lines = [
         f"{'👑' if u.role == UserRole.admin else '👤'}"
         f"{'' if u.is_active else '🚫'} "
-        f"<code>{u.tg_id}</code> @{u.username or '—'} ({u.first_name or '—'})"
+        f"<code>{u.tg_id}</code> @{html.escape(u.username or '—')} "
+        f"({html.escape(u.first_name or '—')})"
         for u in everyone
     ]
     await _reply(message, session, workspace, "<b>Пользователи:</b>\n" + "\n".join(lines))

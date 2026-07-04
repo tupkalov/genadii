@@ -6,6 +6,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.config import get_settings
+from app.llm import http as llm_http
 from app.tools.registry import Tool, ToolContext, register
 
 TAVILY_URL = "https://api.tavily.com/search"
@@ -21,7 +22,14 @@ def _is_private_host(hostname: str) -> bool:
         return True
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
             return True
     return False
 
@@ -31,12 +39,12 @@ async def _web_search(ctx: ToolContext, query: str) -> str:
     if not settings.tavily_api_key:
         return "Ошибка: TAVILY_API_KEY не задан — поиск недоступен."
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            TAVILY_URL,
-            headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
-            json={"query": query, "max_results": 5, "include_answer": True},
-        )
+    response = await llm_http.client.post(
+        TAVILY_URL,
+        headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
+        json={"query": query, "max_results": 5, "include_answer": True},
+        timeout=30,
+    )
     if response.status_code != 200:
         return f"Ошибка поиска: Tavily {response.status_code}: {response.text[:200]}"
 

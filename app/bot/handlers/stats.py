@@ -1,3 +1,4 @@
+import html
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router
@@ -37,6 +38,28 @@ async def cmd_stats(
         )
     ).scalar_one()
 
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    per_user = (
+        await session.execute(
+            select(
+                User.first_name,
+                User.username,
+                func.count(LlmUsage.id),
+                func.coalesce(func.sum(LlmUsage.cost_usd), 0),
+            )
+            .join(User, LlmUsage.user_id == User.id)
+            .where(
+                LlmUsage.workspace_id == workspace.id,
+                LlmUsage.created_at >= month_start,
+            )
+            .group_by(User.id)
+            .order_by(func.sum(LlmUsage.cost_usd).desc())
+            .limit(10)
+        )
+    ).all()
+
     calls, cost_total, p_tokens, c_tokens = total
     text = (
         f"📊 <b>Расходы этого чата</b>\n"
@@ -45,5 +68,10 @@ async def cmd_stats(
         f"• всего: ${cost_total:.4f}\n"
         f"• за 7 дней: ${week:.4f}"
     )
+    if per_user:
+        text += "\n\n<b>Кто сколько в этом месяце:</b>\n" + "\n".join(
+            f"• {html.escape(name or uname or '—')}: ${cost:.4f} ({cnt} выз.)"
+            for name, uname, cnt, cost in per_user
+        )
     sent = await message.answer(text)
     await messages.save_assistant(session, workspace, text, tg_message_id=sent.message_id)

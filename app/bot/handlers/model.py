@@ -1,3 +1,5 @@
+import html
+
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
@@ -25,7 +27,7 @@ async def cmd_model(
         current = pick_model(workspace)
         override = (workspace.settings or {}).get("model_override")
         text = (
-            f"Модель этого чата: <code>{current}</code>"
+            f"Модель этого чата: <code>{html.escape(current)}</code>"
             + ("" if override else " (дефолт)")
             + f"\nДефолт: <code>{settings.default_model}</code>\n\n"
             "Сменить (только админ): <code>/model vendor/model-name</code>\n"
@@ -40,7 +42,10 @@ async def cmd_model(
             text = f"Вернул дефолтную модель: <code>{settings.default_model}</code>"
         else:
             new_settings["model_override"] = command.args.strip()
-            text = f"Теперь этот чат думает через <code>{command.args.strip()}</code>"
+            text = (
+                "Теперь этот чат думает через "
+                f"<code>{html.escape(command.args.strip())}</code>"
+            )
         workspace.settings = new_settings
         await audit.log(
             session,

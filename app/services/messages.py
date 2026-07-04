@@ -6,7 +6,7 @@ from aiogram.types import (
     MessageOriginHiddenUser,
     MessageOriginUser,
 )
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Message, MessageRole, User, Workspace
@@ -94,6 +94,81 @@ async def update_edited(
     message.content = content
     await session.flush()
     return message
+
+
+def _summary_floor(workspace: Workspace) -> int:
+    """Сообщения с id <= floor уже сжаты в сводку — их не трогаем при /undo."""
+    return (workspace.settings or {}).get("summary_upto_id", 0)
+
+
+async def drop_command_row(
+    session: AsyncSession, workspace: Workspace, tg_message_id: int
+) -> None:
+    """Убирает из истории само командное сообщение (/undo, /retry, /search …),
+    сохранённое middleware'ом — в контексте LLM ему делать нечего."""
+    await session.execute(
+        delete(Message).where(
+            Message.workspace_id == workspace.id,
+            Message.tg_message_id == tg_message_id,
+            Message.role == MessageRole.user,
+        )
+    )
+
+
+async def delete_last_exchange(session: AsyncSession, workspace: Workspace) -> int:
+    """Для /undo: удаляет последний ответ ассистента и предшествующий ход юзера
+    (вместе со всем, что между ними — вложения, многочастевые ответы).
+    Возвращает число удалённых строк; 0 — нечего удалять."""
+    floor = _summary_floor(workspace)
+    last_assistant_id = await session.scalar(
+        select(func.max(Message.id)).where(
+            Message.workspace_id == workspace.id,
+            Message.role == MessageRole.assistant,
+            Message.id > floor,
+        )
+    )
+    if last_assistant_id is None:
+        return 0
+    prev_user_id = await session.scalar(
+        select(func.max(Message.id)).where(
+            Message.workspace_id == workspace.id,
+            Message.role == MessageRole.user,
+            Message.id < last_assistant_id,
+            Message.id > floor,
+        )
+    )
+    start_id = prev_user_id if prev_user_id is not None else last_assistant_id
+    result = await session.execute(
+        delete(Message).where(
+            Message.workspace_id == workspace.id, Message.id >= start_id
+        )
+    )
+    return result.rowcount
+
+
+async def delete_trailing_assistant(
+    session: AsyncSession, workspace: Workspace
+) -> int | None:
+    """Для /retry: удаляет ответы ассистента после последнего хода юзера,
+    чтобы история заканчивалась вопросом. Возвращает число удалённых строк
+    (0 — юзер ещё не получил ответа, ретраить всё равно можно);
+    None — ходов юзера в истории нет вообще."""
+    floor = _summary_floor(workspace)
+    last_user_id = await session.scalar(
+        select(func.max(Message.id)).where(
+            Message.workspace_id == workspace.id,
+            Message.role == MessageRole.user,
+            Message.id > floor,
+        )
+    )
+    if last_user_id is None:
+        return None
+    result = await session.execute(
+        delete(Message).where(
+            Message.workspace_id == workspace.id, Message.id > last_user_id
+        )
+    )
+    return result.rowcount
 
 
 async def save_assistant(

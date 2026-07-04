@@ -12,6 +12,7 @@ from app.bot.formatting import send_rendered
 from app.config import get_settings
 from app.db.models import ScheduledTask, User, Workspace
 from app.db.session import session_factory
+from app.llm import http as llm_http
 from app.llm.client import LlmError
 from app.services import alerts, budget, llm_chat, messages, reminders
 
@@ -41,6 +42,7 @@ async def startup(ctx: dict) -> None:
 
 async def shutdown(ctx: dict) -> None:
     await ctx["bot"].session.close()
+    await llm_http.aclose()
 
 
 async def _send_and_log(
@@ -104,6 +106,21 @@ async def _run_agent_task(
         )
 
 
+async def claim_task(session: AsyncSession, task_id: int) -> bool:
+    """Атомарный захват задачи: True, если именно мы перевели pending→running.
+
+    Свипы могут перекрываться (LLM-задача живёт дольше 20с между кронами),
+    поэтому смена статуса через ORM-присваивание недостаточна — нужен
+    UPDATE ... WHERE status='pending' с проверкой rowcount."""
+    claimed = await session.execute(
+        update(ScheduledTask)
+        .where(ScheduledTask.id == task_id, ScheduledTask.status == "pending")
+        .values(status="running")
+    )
+    await session.commit()
+    return claimed.rowcount == 1
+
+
 async def check_due_tasks(ctx: dict) -> None:
     """Sweeper: выполняет просроченные pending-задачи. Источник правды — БД."""
     bot: Bot = ctx["bot"]
@@ -124,9 +141,11 @@ async def check_due_tasks(ctx: dict) -> None:
         ).all()
 
         for task, workspace in rows:
-            # Защита от повторного захвата, пока LLM-задача выполняется
+            if not await claim_task(session, task.id):
+                continue  # параллельный свип уже забрал эту задачу
+            # Синхронизируем ORM-объект с БД: иначе для cron-задачи финальное
+            # task.status = "pending" выглядело бы как no-op и не записалось бы
             task.status = "running"
-            await session.commit()
 
             try:
                 if task.kind == "agent_task":
@@ -151,7 +170,7 @@ async def check_due_tasks(ctx: dict) -> None:
                         session,
                         workspace,
                         f"⚠️ Задача #{task.id} не выполнилась: "
-                        f"{type(exc).__name__}: {str(exc)[:200]}",
+                        f"{alerts.safe_error_text(exc)}",
                     )
                 except Exception:
                     logger.exception("Не смог сообщить об ошибке задачи #%s", task.id)
@@ -276,7 +295,9 @@ class WorkerSettings:
     on_shutdown = shutdown
     health_check_interval = 60  # для healthcheck'а `arq --check` в compose
     cron_jobs = [
-        cron(check_due_tasks, second={0, 20, 40}, run_at_startup=True),
+        # max_tries=1: arq не должен перезапускать полусделанный свип по
+        # таймауту — задачи и так подберёт следующий крон через 20с
+        cron(check_due_tasks, second={0, 20, 40}, run_at_startup=True, timeout=600, max_tries=1),
         cron(reindex_memory, minute={0, 15, 30, 45}, run_at_startup=True),
         cron(compress_histories, minute={5}, run_at_startup=True),
         cron(send_digests, second={0}),  # ежеминутная проверка времени дайджестов

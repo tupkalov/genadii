@@ -68,7 +68,8 @@ async def list_facts(
     )
 
     query_vector = None
-    if query_text:
+    # Совсем короткие реплики («ок», «да») бессмысленно ранжировать — recency
+    if query_text and len(query_text.strip()) >= 15:
         has_any = await session.scalar(select(MemoryEntry.id).where(*base_filter).limit(1))
         if has_any is not None:
             try:

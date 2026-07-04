@@ -1,3 +1,5 @@
+import html
+
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -16,13 +18,13 @@ async def cmd_whoami(
     text = (
         "<b>Ты:</b>\n"
         f"• tg_id: <code>{user.tg_id}</code>\n"
-        f"• username: @{user.username or '—'}\n"
+        f"• username: @{html.escape(user.username or '—')}\n"
         f"• роль: <b>{user.role.value}</b>\n"
         f"• в whitelist с: {user.created_at:%Y-%m-%d}\n\n"
         "<b>Workspace:</b>\n"
         f"• id: <code>{workspace.id}</code>\n"
         f"• тип: <b>{workspace.type.value}</b>\n"
-        f"• название: {workspace.title or '—'}\n"
+        f"• название: {html.escape(workspace.title or '—')}\n"
         f"• tg_chat_id: <code>{workspace.tg_chat_id}</code>"
     )
     sent = await message.answer(text)

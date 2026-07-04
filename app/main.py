@@ -13,6 +13,7 @@ from app.bot.commands import setup_bot_commands
 from app.bot.setup import create_dispatcher
 from app.config import get_settings
 from app.db.session import session_factory
+from app.llm import http as llm_http
 from app.services import users
 
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
     with contextlib.suppress(asyncio.CancelledError):
         await polling_task
     await bot.session.close()
+    await llm_http.aclose()
 
 
 app = FastAPI(title="Умный Геннадий", lifespan=lifespan)

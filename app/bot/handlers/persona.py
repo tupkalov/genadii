@@ -1,3 +1,5 @@
+import html
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -73,7 +75,7 @@ async def cmd_persona(
     persona = (workspace.settings or {}).get("persona")
     if persona:
         text = (
-            f"Мой характер в этом чате:\n<i>{persona}</i>\n\n"
+            f"Мой характер в этом чате:\n<i>{html.escape(persona)}</i>\n\n"
             "Поменять: <code>/persona новое описание</code>"
         )
     else:

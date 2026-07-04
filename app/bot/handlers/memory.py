@@ -1,3 +1,5 @@
+import html
+
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
@@ -16,7 +18,7 @@ async def cmd_memory(
     facts = await memory.list_facts(session, workspace, limit=50)
     if facts:
         text = "<b>Что я помню в этом чате:</b>\n" + "\n".join(
-            f"• <code>#{f.id}</code> {f.content}" for f in reversed(facts)
+            f"• <code>#{f.id}</code> {html.escape(f.content)}" for f in reversed(facts)
         )
         text += "\n\nЗабыть: <code>/forget номер</code>"
     else:
@@ -41,7 +43,7 @@ async def cmd_forget(
         if entry is None:
             text = f"Факта #{arg} в этом чате нет."
         else:
-            text = f"Забыл: «{entry.content}» 🗑"
+            text = f"Забыл: «{html.escape(entry.content)}» 🗑"
             await audit.log(
                 session,
                 action="memory_forget",

@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, TelegramObject
 
 from app.config import get_settings
 from app.db.models import UserRole
@@ -15,18 +15,23 @@ DENIED_TEXT = (
 
 
 class AuthMiddleware(BaseMiddleware):
-    """Whitelist в БД: незнакомцев не пускаем, попытку логируем в audit_log."""
+    """Whitelist в БД: незнакомцев не пускаем, попытку логируем в audit_log.
+
+    Событийно-агностична (Message, CallbackQuery, ...) — чат берём из
+    data["event_chat"], который aiogram кладёт для всех типов апдейтов.
+    """
 
     async def __call__(
         self,
-        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
-        event: Message,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
         tg_user = data.get("event_from_user")
         if tg_user is None or tg_user.is_bot:
             return None
 
+        chat = data.get("event_chat")
         session = data["session"]
         user = await users.get_by_tg_id(session, tg_user.id)
 
@@ -41,12 +46,15 @@ class AuthMiddleware(BaseMiddleware):
                 payload={
                     "tg_id": tg_user.id,
                     "username": tg_user.username,
-                    "chat_id": event.chat.id,
-                    "chat_type": event.chat.type,
+                    "chat_id": chat.id if chat else None,
+                    "chat_type": chat.type if chat else None,
                 },
             )
-            # В группах молчим, чтобы не спамить; в личке вежливо отказываем
-            if event.chat.type == "private":
+            if isinstance(event, CallbackQuery):
+                # Тост показывает HTML буквально — только plain text
+                await event.answer("Нет доступа 🙅", show_alert=True)
+            elif chat is not None and chat.type == "private":
+                # В группах молчим, чтобы не спамить; в личке вежливо отказываем
                 await event.answer(DENIED_TEXT.format(tg_id=tg_user.id))
             return None
 

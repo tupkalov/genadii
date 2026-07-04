@@ -1,3 +1,5 @@
+import html
+
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
@@ -26,7 +28,7 @@ async def cmd_tasks(
         if task is None:
             text = "Такой активной задачи в этом чате нет."
         else:
-            text = f"Отменил #{task.id}: {(task.payload or {}).get('text', '')}"
+            text = f"Отменил #{task.id}: {html.escape((task.payload or {}).get('text', ''))}"
             await audit.log(
                 session,
                 action="task_cancelled",
@@ -44,8 +46,8 @@ async def cmd_tasks(
                 if t.cron:
                     when += f" (cron: {t.cron})"
                 lines.append(
-                    f"• {icon} <code>#{t.id}</code> {when} — "
-                    f"{(t.payload or {}).get('text', '')}"
+                    f"• {icon} <code>#{t.id}</code> {html.escape(when)} — "
+                    f"{html.escape((t.payload or {}).get('text', ''))}"
                 )
             text = (
                 "<b>Запланировано (⏰ напоминание / 🤖 задача):</b>\n"

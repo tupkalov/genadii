@@ -13,6 +13,10 @@ COPY tests ./tests
 
 RUN pip install --no-cache-dir .
 
+# Не root: приложение на диск не пишет (логи в stdout, alembic только читает)
+RUN useradd --create-home gennady
+USER gennady
+
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

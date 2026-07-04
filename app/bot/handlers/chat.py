@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import logging
 import random
 import time
@@ -63,22 +64,28 @@ class _StreamEditor:
         self.latest = ""
         self.last_edit = 0.0
         self._lock = asyncio.Lock()
+        # Флаг вместо проверки _lock.locked(): между create_task и захватом
+        # лока таском следующая feed успела бы создать дубль-flush
+        self._flush_scheduled = False
 
     def feed(self, text: str) -> None:
         self.latest = text
-        if time.monotonic() - self.last_edit >= self.interval and not self._lock.locked():
+        if time.monotonic() - self.last_edit >= self.interval and not self._flush_scheduled:
+            self._flush_scheduled = True
             asyncio.create_task(self._flush())
 
     async def _flush(self) -> None:
         async with self._lock:
+            self._flush_scheduled = False
             self.last_edit = time.monotonic()
             text = self.latest.strip()[:3900]
             if not text:
                 return
             try:
                 await self.placeholder.edit_text(text + " ▍", parse_mode=None)
-            except Exception:
-                pass  # 429/not-modified — не критично, финальная правка всё поправит
+            except Exception as exc:
+                # 429/not-modified — не критично, финальная правка всё поправит
+                logger.debug("Stream-правка не прошла: %s", exc)
 
 
 async def _send_attachments(
@@ -102,6 +109,7 @@ async def _generate_and_send(
     workspace: Workspace,
     session: AsyncSession,
     extra_user_message: str | list[dict] | None = None,
+    force_model: str | None = None,
 ) -> None:
     """Общий пайплайн: бюджет -> LLM (с tools, стриминг) -> ответ + вложения -> учёт."""
     if await _check_budget(message, session, workspace):
@@ -129,6 +137,7 @@ async def _generate_and_send(
             chat_id=message.chat.id,
             target_message_id=message.message_id,
             on_delta=on_delta,
+            force_model=force_model,
         )
     except LlmError as exc:
         logger.error("LLM error (workspace=%s): %s", workspace.id, exc)
@@ -212,7 +221,9 @@ async def _delayed_reply(
         logger.exception("Отложенный ответ упал (chat=%s)", message.chat.id)
         try:
             await message.answer(
-                f"⚠️ Что-то сломалось: <code>{type(exc).__name__}</code>. Попробуй ещё раз."
+                "⚠️ Что-то сломалось: "
+                f"<code>{html.escape(alerts.safe_error_text(exc, 100))}</code>. "
+                "Попробуй ещё раз."
             )
         except Exception:
             pass

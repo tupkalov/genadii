@@ -135,21 +135,26 @@ async def generate_reply(
     chat_id: int | None = None,
     target_message_id: int | None = None,
     on_delta=None,
+    force_model: str | None = None,
 ) -> ChatOutcome:
     """Контекст + tool-calling цикл. Входящее сообщение уже в истории.
 
     extra_user_message-список (content-массив с image_url) включает
     мультимодальный режим — ход выполняет vision-модель.
     bot/chat_id/target_message_id пробрасываются в tools (реакции).
+    force_model — разовый оверрайд модели (напр. /retry smart).
     """
     tools = await permissions.enabled_tools(session, workspace)
     messages = await _build_messages(session, workspace, extra_user_message, tools, user)
     is_multimodal = isinstance(extra_user_message, list)
-    model = pick_model(workspace, multimodal=is_multimodal)
+    model = force_model or pick_model(workspace, multimodal=is_multimodal)
     # Эскалация на smart-модель при зацикливании: не трогаем мультимодальные
-    # ходы (там нужна именно vision-модель) и явный оверрайд пользователя.
-    can_escalate = not is_multimodal and not (workspace.settings or {}).get(
-        "model_override"
+    # ходы (там нужна именно vision-модель), явный оверрайд пользователя
+    # и разовый force_model.
+    can_escalate = (
+        force_model is None
+        and not is_multimodal
+        and not (workspace.settings or {}).get("model_override")
     )
     smart_model = get_settings().smart_model
 

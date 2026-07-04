@@ -6,12 +6,10 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import UserRole, Workspace
-from app.db.session import session_factory
-from app.services import audit, messages, users
+from app.services import audit, messages
 from app.tools import TOOLS, permissions
 
 router = Router(name="tools")
@@ -80,38 +78,33 @@ async def cmd_tools(
 
 
 @router.callback_query(F.data.startswith("tooltoggle:"))
-async def cb_tool_toggle(callback: CallbackQuery) -> None:
-    # Callback-и идут мимо message-middleware — сессия и проверки здесь свои
+async def cb_tool_toggle(
+    callback: CallbackQuery,
+    user,
+    workspace: Workspace,
+    session: AsyncSession,
+) -> None:
+    # Whitelist (включая is_active) и workspace — из общей цепочки middleware
     tool_name = callback.data.split(":", 1)[1]
     if tool_name not in TOOLS or callback.message is None:
         await callback.answer("Такого инструмента больше нет", show_alert=False)
         return
+    if user.role != UserRole.admin:
+        await callback.answer("Только админ 🙅", show_alert=False)
+        return
 
-    async with session_factory() as session:
-        user = await users.get_by_tg_id(session, callback.from_user.id)
-        if user is None or user.role != UserRole.admin:
-            await callback.answer("Только админ 🙅", show_alert=False)
-            return
-        workspace = await session.scalar(
-            select(Workspace).where(Workspace.tg_chat_id == callback.message.chat.id)
-        )
-        if workspace is None:
-            await callback.answer("Workspace не найден", show_alert=False)
-            return
-
-        enabled_now = tool_name in await _enabled_names(session, workspace)
-        await permissions.set_permission(
-            session, workspace, tool_name, not enabled_now, granted_by_id=user.id
-        )
-        await audit.log(
-            session,
-            action="tool_permission_set",
-            payload={"tool": tool_name, "enabled": not enabled_now},
-            workspace_id=workspace.id,
-            user_id=user.id,
-        )
-        enabled = await _enabled_names(session, workspace)
-        await session.commit()
+    enabled_now = tool_name in await _enabled_names(session, workspace)
+    await permissions.set_permission(
+        session, workspace, tool_name, not enabled_now, granted_by_id=user.id
+    )
+    await audit.log(
+        session,
+        action="tool_permission_set",
+        payload={"tool": tool_name, "enabled": not enabled_now},
+        workspace_id=workspace.id,
+        user_id=user.id,
+    )
+    enabled = await _enabled_names(session, workspace)
 
     await callback.message.edit_reply_markup(reply_markup=_keyboard(enabled))
     await callback.answer(

@@ -11,7 +11,7 @@ from aiogram.types import BufferedInputFile, Message
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.formatting import edit_rendered, reply_rendered, send_rendered
+from app.bot.formatting import reply_rendered, send_rendered
 from app.config import get_settings
 from app.db.models import User, Workspace, WorkspaceType
 from app.db.session import session_factory
@@ -121,13 +121,25 @@ async def _generate_and_send(
     editor: _StreamEditor | None = None
     on_delta = None
     if settings.stream_responses:
+        # Черновик без уведомления: единственный пуш пользователь получит от
+        # финального сообщения с готовым текстом, а не от «⌨️ …»
         placeholder = await (
-            message.reply("⌨️ …") if as_reply else message.answer("⌨️ …")
+            message.reply("⌨️ …", disable_notification=True)
+            if as_reply
+            else message.answer("⌨️ …", disable_notification=True)
         )
         editor = _StreamEditor(placeholder, settings.stream_edit_interval)
         on_delta = editor.feed
     else:
         await message.bot.send_chat_action(message.chat.id, "typing")
+
+    async def _drop_placeholder() -> None:
+        if editor is None:
+            return
+        try:
+            await editor.placeholder.delete()
+        except Exception as exc:
+            logger.debug("Не смог удалить стриминговый черновик: %s", exc)
 
     try:
         outcome = await llm_chat.generate_reply(
@@ -143,19 +155,16 @@ async def _generate_and_send(
         logger.error("LLM error (workspace=%s): %s", workspace.id, exc)
         await alerts.record_llm_failure(message.bot)
         reply = NO_KEY_REPLY if "OPENROUTER_API_KEY" in str(exc) else ERROR_REPLY
-        if editor is not None:
-            await edit_rendered(editor.placeholder, reply)
-        else:
-            await message.answer(reply)
+        await _drop_placeholder()
+        await message.answer(reply)
         return
 
     text = outcome.text.strip() or "…"
 
-    if editor is not None:
-        await edit_rendered(editor.placeholder, text)
-        sent = editor.placeholder
-    else:
-        sent = await reply_rendered(message, text, as_reply=as_reply)
+    # Черновик стримился правками (без пушей) — финал уходит новым сообщением,
+    # чтобы пользователю пришло уведомление с готовым текстом
+    await _drop_placeholder()
+    sent = await reply_rendered(message, text, as_reply=as_reply)
 
     saved = await messages.save_assistant(
         session, workspace, text, tg_message_id=sent.message_id

@@ -18,8 +18,9 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     default_model: str = "deepseek/deepseek-chat"
     # Эскалация при зацикливании на инструментах (Ит.10) — reasoning-версия
-    # того же класса, не топовый флагман
-    smart_model: str = "deepseek/deepseek-reasoner"
+    # того же класса, не топовый флагман. ID именно OpenRouter'а
+    # («deepseek-reasoner» — это имя из нативного API DeepSeek, тут его нет)
+    smart_model: str = "deepseek/deepseek-r1-0528"
     history_limit: int = 30  # сколько последних сообщений чата отдаём в контекст
     # Пауза после последнего сообщения перед ответом: серия сообщений/форвардов
     # получает один общий ответ вместо ответа на каждое

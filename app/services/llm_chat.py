@@ -1,3 +1,4 @@
+import logging
 import re
 from dataclasses import dataclass
 
@@ -20,6 +21,8 @@ from app.services import memory
 from app.tools import permissions
 from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
+
+logger = logging.getLogger("gennady.llm_chat")
 
 MAX_TOOL_ITERATIONS = 8  # исследовательские запросы могут делать много поисков подряд
 ESCALATE_AFTER_ITERATIONS = 3  # если зациклились на инструментах — берём модель посильнее
@@ -179,12 +182,28 @@ async def generate_reply(
             smart_model if can_escalate and iteration >= ESCALATE_AFTER_ITERATIONS else model
         )
 
-        if on_delta is not None:
-            result = await client.chat_stream(
-                messages, round_model, tools=round_tools, on_delta=on_delta
+        try:
+            if on_delta is not None:
+                result = await client.chat_stream(
+                    messages, round_model, tools=round_tools, on_delta=on_delta
+                )
+            else:
+                result = await client.chat(messages, round_model, tools=round_tools)
+        except client.LlmError:
+            if round_model == model:
+                raise
+            # Эскалация — оптимизация, а не точка отказа: умная модель упала
+            # (невалидный ID, недоступна) — доезжаем на базовой без эскалаций
+            logger.warning(
+                "Smart-модель %s упала, откатываюсь на %s", round_model, model
             )
-        else:
-            result = await client.chat(messages, round_model, tools=round_tools)
+            can_escalate = False
+            if on_delta is not None:
+                result = await client.chat_stream(
+                    messages, model, tools=round_tools, on_delta=on_delta
+                )
+            else:
+                result = await client.chat(messages, model, tools=round_tools)
         usages.append(result)
 
         if not result.tool_calls:

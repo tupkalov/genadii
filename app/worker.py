@@ -83,7 +83,10 @@ async def _run_agent_task(
     instruction = (
         f"[Запланированная задача #{task.id}, поставил(а) "
         f"{payload.get('user_name') or 'кто-то из чата'}. Выполни и напиши результат "
-        f"в чат.]\n{payload.get('text', '')}"
+        "в чат. Ты работаешь без присмотра: если инструмент падает — почини и "
+        "перезапусти прямо сейчас; данные только из результатов инструментов, "
+        "ничего не выдумывай; не обещай доделать позже.]\n"
+        f"{payload.get('text', '')}"
     )
     outcome = await llm_chat.generate_reply(
         session, workspace, user, extra_user_message=instruction

@@ -26,6 +26,15 @@ logger = logging.getLogger("gennady.chat")
 router = Router(name="chat")
 
 ERROR_REPLY = "😔 Что-то мозги отказали (ошибка LLM). Попробуй ещё раз, а админ пусть глянет логи."
+# Пока бот недавно отвечал в чате, proactive-встревания подавляются
+BOT_ACTIVE_SECONDS = 180
+
+
+async def _mark_bot_active(chat_id: int) -> None:
+    try:
+        await _redis.set(f"botactive:{chat_id}", "1", ex=BOT_ACTIVE_SECONDS)
+    except Exception as exc:
+        logger.debug("Не смог поставить метку активности бота: %s", exc)
 NO_KEY_REPLY = "🧠 Мозги ещё не подключены: админ не задал OPENROUTER_API_KEY."
 BUDGET_REPLY = (
     "⛔ Месячный бюджет чата исчерпан (${spend:.2f} из ${limit:.2f}). "
@@ -114,6 +123,10 @@ async def _generate_and_send(
     """Общий пайплайн: бюджет -> LLM (с tools, стриминг) -> ответ + вложения -> учёт."""
     if await _check_budget(message, session, workspace):
         return
+
+    # Метка «бот сейчас общается в этом чате» — proactive не должен встревать
+    # в живой диалог своей запоздавшей репликой (ставим до генерации: она долгая)
+    await _mark_bot_active(message.chat.id)
 
     settings = get_settings()
     as_reply = workspace.type == WorkspaceType.group
@@ -245,6 +258,12 @@ async def _maybe_proactive(
     percent = (workspace.settings or {}).get("proactive_percent", 0)
     if not percent or random.random() * 100 >= percent:
         return
+    # Не встреваем, пока бот и так участвует в разговоре: ждёт debounce-ответ
+    # или недавно отвечал — иначе запоздавшая реплика выглядит как второй ответ
+    if _pending.get(message.chat.id) is not None:
+        return
+    if await _redis.exists(f"botactive:{message.chat.id}"):
+        return
     # Кулдаун: не чаще раза в proactive_cooldown секунд на чат
     settings = get_settings()
     if not await _redis.set(
@@ -259,6 +278,13 @@ async def _maybe_proactive(
     )
     if outcome is None:
         return
+    # Пока встревание генерилось, кто-то мог обратиться к боту напрямую —
+    # тогда молчим, чтобы не выглядеть «ответил два раза»
+    if _pending.get(message.chat.id) is not None or await _redis.exists(
+        f"botactive:{message.chat.id}"
+    ):
+        return
+    await _mark_bot_active(message.chat.id)
     sent = await send_rendered(message.bot, message.chat.id, outcome.text.strip())
     saved = await messages.save_assistant(
         session, workspace, outcome.text.strip(), tg_message_id=sent.message_id

@@ -31,8 +31,12 @@ ESCALATE_AFTER_ITERATIONS = 3  # если зациклились на инстр
 # пишут псевдо-вызов инструмента прямо в текст ответа (спецтокены вида <｜tool...｜>,
 # [TOOL_CALLS], "invoke name="). Такое нельзя показывать пользователю как есть.
 _FAKE_TOOL_CALL_RE = re.compile(
-    r"<｜|<\|[^>]*(tool.call|tool.calls)[^>]*\|>|\[TOOL_CALLS\]|<invoke\s+name=",
-    re.IGNORECASE,
+    r"<｜|<\|[^>]*(tool.call|tool.calls)[^>]*\|>|\[TOOL_CALLS\]|<invoke\s+name="
+    # Вариант «function.RunPython / functions.run_python» отдельной строкой,
+    # за которой модель пишет json-аргументы текстом (живой кейс DeepSeek)
+    r"|^\s*functions?\.\w+\s*$"
+    r"|<tool_call>",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 

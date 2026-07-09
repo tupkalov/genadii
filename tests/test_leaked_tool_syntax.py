@@ -20,8 +20,28 @@ def test_detects_invoke_name_marker():
     assert _has_leaked_tool_syntax('<invoke name="web_search">') is True
 
 
+def test_detects_function_dot_name_line():
+    # Живой кейс 09.07: «function.RunPython» отдельной строкой + json-аргументы
+    # текстом — инструмент реально не вызван, а код утёк пользователю в чат
+    leaked = (
+        "Ошибка: в API что-то поменяли, но сейчас срочно починю код 🛠️\n\n"
+        "function.RunPython\n"
+        "json\n"
+        '{"code": "import requests\\n..."}'
+    )
+    assert _has_leaked_tool_syntax(leaked) is True
+
+
+def test_detects_functions_plural_and_snake_case():
+    assert _has_leaked_tool_syntax('functions.run_python\n{"code": "1"}') is True
+
+
 def test_normal_text_is_clean():
     assert _has_leaked_tool_syntax("Вот твой дайджест на сегодня: 3 задачи.") is False
+    # «function.» в середине предложения — не утечка
+    assert (
+        _has_leaked_tool_syntax("В JS метод function.call() зовёт функцию.") is False
+    )
 
 
 def test_empty_and_none_are_clean():

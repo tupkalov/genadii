@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from fastapi import FastAPI
 
-from app.api.routes import dashboard, health, hooks, logs, stats
+from app.api.routes import dashboard, health, hooks, logs, oauth, stats
 from app.bot.commands import setup_bot_commands
 from app.bot.setup import create_dispatcher
 from app.config import get_settings
@@ -62,3 +62,4 @@ app.include_router(stats.router)
 app.include_router(logs.router)
 app.include_router(dashboard.router)
 app.include_router(hooks.router)
+app.include_router(oauth.router)

@@ -1,0 +1,13 @@
+# Публичный вход: только вебхуки и OAuth-callback.
+# Дашборд/статистика/логи остаются доступны только с localhost:8000.
+oc.tupkalov.ru {
+	handle /hooks/* {
+		reverse_proxy app:8000
+	}
+	handle /oauth/* {
+		reverse_proxy app:8000
+	}
+	handle {
+		respond 404
+	}
+}

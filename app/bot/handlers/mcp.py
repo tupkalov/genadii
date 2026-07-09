@@ -1,3 +1,4 @@
+import asyncio
 import html
 from urllib.parse import urlparse
 
@@ -7,13 +8,14 @@ from aiogram.types import Message
 from sqlalchemy import delete, select
 
 from app.db.models import McpServer, User, UserRole, Workspace
-from app.services import audit, mcp, messages
+from app.services import audit, mcp, mcp_auth, messages
 
 router = Router(name="mcp")
 
 USAGE = (
     "MCP-серверы этого чата. Команды:\n"
-    "<code>/mcp add имя url [токен]</code> — подключить\n"
+    "<code>/mcp add имя url [токен]</code> — подключить (OAuth — сам предложу)\n"
+    "<code>/mcp auth имя</code> — (пере)авторизовать через OAuth\n"
     "<code>/mcp list</code> — список\n"
     "<code>/mcp on|off имя</code> — включить/выключить\n"
     "<code>/mcp refresh</code> — перечитать инструменты\n"
@@ -29,7 +31,7 @@ async def _get_server(session, workspace: Workspace, name: str) -> McpServer | N
     )
 
 
-async def _cmd_add(session, workspace, user, args: list[str]) -> str:
+async def _cmd_add(session, workspace, user, args: list[str], message: Message) -> str:
     if len(args) < 2:
         return "Формат: <code>/mcp add имя url [токен]</code>"
     name, url = args[0].lower(), args[1]
@@ -44,7 +46,37 @@ async def _cmd_add(session, workspace, user, args: list[str]) -> str:
 
     try:
         tools = await mcp.test_connect(url, token)
-    except Exception as exc:  # noqa: BLE001 — показываем причину админу
+    except Exception as exc:  # noqa: BLE001 — 401 → OAuth, остальное показываем
+        if token is None and mcp.looks_like_auth_required(exc):
+            if not mcp_auth.base_url_configured():
+                return (
+                    "Серверу нужна OAuth-авторизация, но не задан "
+                    "<code>WEBHOOK_BASE_URL</code> в .env — без публичного "
+                    "адреса callback не работает."
+                )
+            server = McpServer(
+                workspace_id=workspace.id,
+                name=name,
+                url=url,
+                enabled=False,  # включится после успешной авторизации
+                created_by_id=user.id,
+            )
+            session.add(server)
+            await session.commit()  # фоновый флоу читает строку своей сессией
+            await audit.log(
+                session,
+                action="mcp_oauth_started",
+                payload={"name": name, "url": url},
+                workspace_id=workspace.id,
+                user_id=user.id,
+            )
+            asyncio.create_task(
+                mcp.run_interactive_auth(server.id, message.bot, message.chat.id)
+            )
+            return (
+                f"Сервер «{html.escape(name)}» требует OAuth-авторизацию — "
+                "сейчас пришлю ссылку."
+            )
         return (
             f"Не смог подключиться к {html.escape(url)}:\n"
             f"<code>{html.escape(str(exc)[:300])}</code>"
@@ -130,6 +162,32 @@ async def _cmd_remove(session, workspace, user, name: str) -> str:
     return f"Удалил «{html.escape(name)}»."
 
 
+async def _cmd_auth(session, workspace, user, name: str, message: Message) -> str:
+    server = await _get_server(session, workspace, name)
+    if server is None:
+        return f"Сервера «{html.escape(name)}» в этом чате нет."
+    if not mcp_auth.base_url_configured():
+        return (
+            "Не задан <code>WEBHOOK_BASE_URL</code> в .env — без публичного "
+            "адреса OAuth-callback не работает."
+        )
+    # Свежая авторизация с нуля: старые токены могли протухнуть/быть отозваны
+    server.oauth_tokens = None
+    await mcp.invalidate(server.id)
+    await session.commit()  # фоновый флоу читает строку своей сессией
+    await audit.log(
+        session,
+        action="mcp_oauth_started",
+        payload={"name": name},
+        workspace_id=workspace.id,
+        user_id=user.id,
+    )
+    asyncio.create_task(
+        mcp.run_interactive_auth(server.id, message.bot, message.chat.id)
+    )
+    return f"Запускаю авторизацию «{html.escape(name)}» — сейчас пришлю ссылку."
+
+
 async def _cmd_refresh(session, workspace, user) -> str:
     servers = (
         await session.scalars(
@@ -174,11 +232,13 @@ async def cmd_mcp(
         sub = args[0].lower() if args else "list"
         rest = args[1:]
         if sub == "add":
-            text = await _cmd_add(session, workspace, user, rest)
+            text = await _cmd_add(session, workspace, user, rest, message)
         elif sub == "list":
             text = await _cmd_list(session, workspace)
         elif sub in ("on", "off") and rest:
             text = await _cmd_toggle(session, workspace, user, rest[0].lower(), sub == "on")
+        elif sub == "auth" and rest:
+            text = await _cmd_auth(session, workspace, user, rest[0].lower(), message)
         elif sub == "remove" and rest:
             text = await _cmd_remove(session, workspace, user, rest[0].lower())
         elif sub == "refresh":

@@ -27,6 +27,10 @@ class McpServer(Base):
     # Последний discovered список [{name, description, input_schema}] —
     # для /mcp list без коннекта и как фолбэк при холодном Redis
     tools_cache: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    # OAuth: данные динамической регистрации клиента и выданные токены
+    # (обновляются SDK при refresh через DbTokenStorage)
+    oauth_client_info: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    oauth_tokens: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     cached_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(

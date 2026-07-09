@@ -34,7 +34,7 @@ async def _cleanup(session, workspace):
 async def test_tools_are_namespaced(session, workspace, user, monkeypatch):
     await _add_server(session, workspace, user, "todo")
 
-    async def fake_discover(url, token):
+    async def fake_discover(url, token=None, **kwargs):
         return FAKE_TOOLS
 
     monkeypatch.setattr(mcp, "_discover", fake_discover)
@@ -48,7 +48,7 @@ async def test_tools_are_namespaced(session, workspace, user, monkeypatch):
 async def test_disabled_server_skipped(session, workspace, user, monkeypatch):
     await _add_server(session, workspace, user, "off1", enabled=False)
 
-    async def fake_discover(url, token):
+    async def fake_discover(url, token=None, **kwargs):
         return FAKE_TOOLS
 
     monkeypatch.setattr(mcp, "_discover", fake_discover)
@@ -62,7 +62,7 @@ async def test_broken_server_does_not_break_others(
     await _add_server(session, workspace, user, "good")
     await _add_server(session, workspace, user, "broken")
 
-    async def fake_discover(url, token):
+    async def fake_discover(url, token=None, **kwargs):
         if "broken" in url:
             raise ConnectionError("connection refused")
         return FAKE_TOOLS
@@ -81,7 +81,7 @@ async def test_broken_server_falls_back_to_db_cache(
         session, workspace, user, "flaky", tools_cache=[FAKE_TOOLS[0]]
     )
 
-    async def fake_discover(url, token):
+    async def fake_discover(url, token=None, **kwargs):
         raise ConnectionError("down")
 
     monkeypatch.setattr(mcp, "_discover", fake_discover)
@@ -94,7 +94,7 @@ async def test_discover_cached_in_redis(session, workspace, user, monkeypatch):
     server = await _add_server(session, workspace, user, "cachetest")
     calls = {"n": 0}
 
-    async def fake_discover(url, token):
+    async def fake_discover(url, token=None, **kwargs):
         calls["n"] += 1
         return FAKE_TOOLS
 

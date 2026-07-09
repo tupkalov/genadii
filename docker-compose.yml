@@ -125,6 +125,22 @@ services:
         done
     restart: unless-stopped
 
+  # Публичный HTTPS-вход (авто-сертификат Let's Encrypt): наружу открыты
+  # только /hooks/* и /oauth/* — см. Caddyfile
+  caddy:
+    image: caddy:2-alpine
+    logging: *default-logging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     healthcheck:
@@ -136,6 +152,8 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
 
 networks:
   sandbox_net:

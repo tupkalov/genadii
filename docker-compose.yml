@@ -71,6 +71,24 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  # Шаблон: локальный stdio MCP-сервер как HTTP-sidecar (supergateway).
+  # Бот говорит только по Streamable HTTP; stdio-серверы оборачиваются так:
+  #   1) раскомментируй сервис, подставь свой `--stdio "…"`;
+  #   2) docker compose up -d mcp-filesystem;
+  #   3) в чате: /mcp add fs http://mcp-filesystem:8000/mcp
+  # Для недоверенных серверов добавь лимиты как у sandbox
+  # (mem_limit/pids_limit/cap_drop).
+  #
+  # mcp-filesystem:
+  #   image: supercorp/supergateway:latest
+  #   logging: *default-logging
+  #   command: >
+  #     --stdio "npx -y @modelcontextprotocol/server-filesystem /data"
+  #     --outputTransport streamableHttp --port 8000
+  #   volumes:
+  #     - ./mcp-data:/data
+  #   restart: unless-stopped
+
   postgres:
     image: pgvector/pgvector:pg16
     environment:

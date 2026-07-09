@@ -4,11 +4,13 @@ import pytest
 from sqlalchemy import delete
 
 from app.db.models import (
+    McpServer,
     MemoryEntry,
     Message,
     SavedScript,
     ScheduledTask,
     User,
+    Webhook,
     Workspace,
     WorkspaceType,
 )
@@ -64,5 +66,7 @@ async def user(session):
     await session.execute(delete(ScheduledTask).where(ScheduledTask.user_id == u.id))
     await session.execute(delete(SavedScript).where(SavedScript.created_by_id == u.id))
     await session.execute(delete(MemoryEntry).where(MemoryEntry.created_by_id == u.id))
+    await session.execute(delete(Webhook).where(Webhook.created_by_id == u.id))
+    await session.execute(delete(McpServer).where(McpServer.created_by_id == u.id))
     await session.execute(delete(User).where(User.id == u.id))
     await session.commit()

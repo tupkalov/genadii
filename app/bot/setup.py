@@ -10,6 +10,7 @@ from app.bot.handlers import (
     chat,
     digest,
     history_edit,
+    mcp,
     memory,
     model,
     persona,
@@ -21,6 +22,7 @@ from app.bot.handlers import (
     start,
     stats,
     tools,
+    webhooks,
     whoami,
 )
 from app.bot.middlewares.auth import AuthMiddleware
@@ -80,6 +82,8 @@ def create_dispatcher(session_factory: async_sessionmaker) -> Dispatcher:
     dp.include_router(digest.router)
     dp.include_router(history_edit.router)
     dp.include_router(search.router)
+    dp.include_router(mcp.router)
+    dp.include_router(webhooks.router)
     dp.include_router(chat.router)  # catch-all — всегда последним
 
     dp.include_router(service.edited_router)

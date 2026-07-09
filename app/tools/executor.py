@@ -5,7 +5,7 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.services import audit
-from app.tools.registry import TOOLS, ToolContext
+from app.tools.registry import TOOLS, Tool, ToolContext
 
 logger = logging.getLogger("gennady.tools")
 
@@ -23,12 +23,19 @@ async def _rate_limited(user_id: int, tool_name: str, limit: int) -> bool:
     return count > limit
 
 
-async def execute_tool_call(ctx: ToolContext, tool_call: dict) -> str:
-    """Выполняет один tool call от LLM; каждый вызов — в audit_log."""
+async def execute_tool_call(
+    ctx: ToolContext, tool_call: dict, tools_map: dict[str, Tool] | None = None
+) -> str:
+    """Выполняет один tool call от LLM; каждый вызов — в audit_log.
+
+    tools_map — инструменты именно этого хода (статические + динамические MCP);
+    без него — глобальный реестр. Заодно закрывает дыру: модель не может
+    вызвать инструмент, которого нет в переданном ей списке.
+    """
     name = tool_call.get("function", {}).get("name", "")
     raw_args = tool_call.get("function", {}).get("arguments") or "{}"
 
-    tool = TOOLS.get(name)
+    tool = (tools_map if tools_map is not None else TOOLS).get(name)
     try:
         args = json.loads(raw_args)
     except json.JSONDecodeError:

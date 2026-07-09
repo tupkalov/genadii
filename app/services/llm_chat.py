@@ -17,7 +17,7 @@ from app.db.models import (
 )
 from app.llm import client
 from app.llm.prompts import build_system_prompt
-from app.services import memory
+from app.services import mcp, memory
 from app.tools import permissions
 from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
@@ -152,6 +152,7 @@ async def generate_reply(
     force_model — разовый оверрайд модели (напр. /retry smart).
     """
     tools = await permissions.enabled_tools(session, workspace)
+    tools = tools + await mcp.workspace_mcp_tools(session, workspace)
     messages = await _build_messages(session, workspace, extra_user_message, tools, user)
     is_multimodal = isinstance(extra_user_message, list)
     model = force_model or pick_model(workspace, multimodal=is_multimodal)
@@ -259,8 +260,9 @@ async def generate_reply(
             round_delta(f"⚙️ {tool_names}…")
 
         messages.append(result.raw_message)
+        tools_map = {t.name: t for t in tools}
         for tool_call in result.tool_calls:
-            output = await execute_tool_call(ctx, tool_call)
+            output = await execute_tool_call(ctx, tool_call, tools_map=tools_map)
             # Маркеры наших failure-nudge'ей: со следующего раунда — smart-модель,
             # дешёвая при починке кода плодит новые баги вместо исправления
             if "[Код упал" in output or "[Разберись с причиной" in output:

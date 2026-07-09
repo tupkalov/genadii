@@ -30,6 +30,8 @@ ADMIN_COMMANDS = [
     BotCommand(command="kick", description="Убрать из whitelist: id или reply"),
     BotCommand(command="users", description="Список пользователей"),
     BotCommand(command="dashboard", description="Как открыть веб-дашборд"),
+    BotCommand(command="mcp", description="MCP-серверы этого чата"),
+    BotCommand(command="hook", description="Входящие вебхуки этого чата"),
 ]
 
 

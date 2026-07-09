@@ -27,11 +27,40 @@ def forward_label(origin: MessageOrigin | None) -> str | None:
     return None
 
 
+REPLY_SNIPPET_LIMIT = 400
+
+
+def _reply_author(reply: TgMessage) -> str:
+    sender = reply.from_user
+    if sender is not None:
+        return sender.first_name or sender.username or str(sender.id)
+    sender_chat = getattr(reply, "sender_chat", None)
+    if sender_chat is not None and sender_chat.title:
+        return f"«{sender_chat.title}»"
+    return "кого-то"
+
+
 def _decorate(tg_message: TgMessage, content: str) -> str:
-    """Добавляет к тексту метки цитаты и пересылки, чтобы модель их учитывала."""
-    # Telegram-цитата: пользователь выделил конкретный фрагмент при ответе
+    """Добавляет к тексту метки реплая, цитаты и пересылки, чтобы модель их учитывала."""
+    # Реплай: без метки модель не знает, на какое сообщение отвечают, — а его
+    # может вообще не быть в истории (другой бот, старое, не из whitelist'а)
+    reply = tg_message.reply_to_message
     quote = getattr(tg_message, "quote", None)
-    if quote and quote.text:
+    if reply is not None:
+        # Цитата — выделенный фрагмент реплай-сообщения; если её нет, берём целиком
+        quoted = (
+            quote.text
+            if quote and quote.text
+            else (reply.text or reply.caption or ("[фото]" if reply.photo else None))
+        )
+        if quoted:
+            snippet = quoted[:REPLY_SNIPPET_LIMIT] + (
+                "…" if len(quoted) > REPLY_SNIPPET_LIMIT else ""
+            )
+            content = (
+                f"[в ответ на сообщение {_reply_author(reply)}: «{snippet}»]\n{content}"
+            )
+    elif quote and quote.text:
         content = f"[обращает внимание на цитату: «{quote.text}»]\n{content}"
     label = forward_label(tg_message.forward_origin)
     if label:

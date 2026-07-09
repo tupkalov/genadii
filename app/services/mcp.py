@@ -87,9 +87,25 @@ async def test_connect(url: str, auth_token: str | None) -> list[dict]:
     return await _discover(url, auth_token)
 
 
-def looks_like_auth_required(exc: Exception) -> bool:
-    """Эвристика «сервер требует OAuth»: 401/Unauthorized в тексте ошибки."""
-    text = str(exc)
+def unwrap_error(exc: BaseException) -> BaseException:
+    """Достаёт содержательную ошибку из anyio ExceptionGroup (МCP-клиент
+    заворачивает всё в TaskGroup, чей str бесполезен)."""
+    depth = 0
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions and depth < 5:
+        exc = exc.exceptions[0]
+        depth += 1
+    return exc
+
+
+def error_text(exc: BaseException, limit: int = 300) -> str:
+    inner = unwrap_error(exc)
+    return f"{type(inner).__name__}: {str(inner)[:limit]}"
+
+
+def looks_like_auth_required(exc: BaseException) -> bool:
+    """Эвристика «сервер требует OAuth»: 401/Unauthorized в тексте ошибки
+    (с разворачиванием ExceptionGroup — там прячется настоящий HTTPStatusError)."""
+    text = str(unwrap_error(exc))
     return "401" in text or "unauthorized" in text.lower()
 
 
@@ -117,7 +133,7 @@ async def _cached_tools(server: McpServer) -> list[dict] | None:
     try:
         tools = await _discover(server.url, server.auth_token, auth=_server_auth(server))
     except Exception as exc:
-        logger.warning("MCP «%s» недоступен: %s", server.name, exc)
+        logger.warning("MCP «%s» недоступен: %s", server.name, error_text(exc))
         try:
             await _redis.set(fail_key, "1", ex=FAIL_CACHE_TTL)
         except Exception:
@@ -253,10 +269,10 @@ async def run_interactive_auth(server_id: int, bot, chat_id: int) -> None:
         )
         return
     except Exception as exc:  # noqa: BLE001 — показываем причину админу
-        logger.warning("OAuth-подключение «%s» не удалось: %s", name, exc)
+        logger.warning("OAuth-подключение «%s» не удалось: %s", name, error_text(exc))
         await bot.send_message(
             chat_id,
-            f"😔 Не смог подключить «{name}»: {str(exc)[:200]}\n"
+            f"😔 Не смог подключить «{name}»: {error_text(exc, 200)}\n"
             f"Повторить: /mcp auth {name}",
         )
         return

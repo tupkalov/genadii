@@ -79,7 +79,7 @@ async def _cmd_add(session, workspace, user, args: list[str], message: Message) 
             )
         return (
             f"Не смог подключиться к {html.escape(url)}:\n"
-            f"<code>{html.escape(str(exc)[:300])}</code>"
+            f"<code>{html.escape(mcp.error_text(exc))}</code>"
         )
 
     server = McpServer(
@@ -205,7 +205,8 @@ async def _cmd_refresh(session, workspace, user) -> str:
             lines.append(f"🟢 {html.escape(server.name)}: {count} инстр.")
         except Exception as exc:  # noqa: BLE001
             lines.append(
-                f"🔴 {html.escape(server.name)}: <code>{html.escape(str(exc)[:150])}</code>"
+                f"🔴 {html.escape(server.name)}: "
+                f"<code>{html.escape(mcp.error_text(exc, 150))}</code>"
             )
     await audit.log(
         session,

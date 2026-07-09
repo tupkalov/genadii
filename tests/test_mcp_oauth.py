@@ -111,3 +111,23 @@ def test_looks_like_auth_required():
     assert mcp.looks_like_auth_required(Exception("HTTP 401 Unauthorized"))
     assert mcp.looks_like_auth_required(Exception("Client error '401'"))
     assert not mcp.looks_like_auth_required(Exception("connection refused"))
+
+
+def test_401_detected_inside_exception_group():
+    # Живой кейс hubhead.app: anyio заворачивает HTTPStatusError в TaskGroup,
+    # str обёртки — «unhandled errors in a TaskGroup», без «401»
+    from app.services import mcp
+
+    inner = Exception("Client error '401 Unauthorized' for url 'https://x/mcp'")
+    group = BaseExceptionGroup(
+        "unhandled errors in a TaskGroup", [ExceptionGroup("sub", [inner])]
+    )
+    assert mcp.looks_like_auth_required(group)
+    assert "401" in mcp.error_text(group)
+    assert "TaskGroup" not in mcp.error_text(group)
+
+
+def test_error_text_plain_exception():
+    from app.services import mcp
+
+    assert mcp.error_text(ValueError("boom")) == "ValueError: boom"

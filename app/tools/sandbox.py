@@ -6,6 +6,15 @@ from app.tools.registry import Tool, ToolContext, register
 RESULT_LIMIT = 3500
 CODE_LIMIT = 100_000  # синхронно с sandbox/runner.py
 
+# Приклеивается к упавшему запуску: инструкция в последнем tool-сообщении
+# держит модель куда крепче, чем правило в далёком системном промпте
+FAILURE_NUDGE = (
+    "\n\n[Код упал. Причина — в ошибке выше: прочитай её и почини прямо сейчас, "
+    "затем запусти снова (та же ошибка повторно = твоя правка не попала в причину, "
+    "смени подход). Отвечать пользователю выдуманными данными вместо результата "
+    "ЗАПРЕЩЕНО. Не смог починить — покажи пользователю эту ошибку как есть.]"
+)
+
 
 async def _run_python(ctx: ToolContext, code: str) -> str:
     if len(code) > CODE_LIMIT:
@@ -30,7 +39,10 @@ async def _run_python(ctx: ToolContext, code: str) -> str:
     if data.get("stderr"):
         parts.append(f"stderr:\n{data['stderr']}")
     result = "\n".join(parts)
-    return result[:RESULT_LIMIT] + ("…" if len(result) > RESULT_LIMIT else "")
+    result = result[:RESULT_LIMIT] + ("…" if len(result) > RESULT_LIMIT else "")
+    if data["exit_code"] != 0:
+        result += FAILURE_NUDGE
+    return result
 
 
 register(

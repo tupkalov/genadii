@@ -50,7 +50,12 @@ async def execute_tool_call(ctx: ToolContext, tool_call: dict) -> str:
             result = await tool.handler(ctx, **args)
         except Exception as exc:  # noqa: BLE001 — ошибку возвращаем модели
             logger.exception("Tool %s failed (workspace=%s)", name, ctx.workspace.id)
-            result = f"Ошибка выполнения «{name}»: {exc}"
+            result = (
+                f"Ошибка выполнения «{name}»: {exc}\n"
+                "[Разберись с причиной и повтори вызов прямо сейчас. Отвечать "
+                "выдуманными данными вместо результата ЗАПРЕЩЕНО; не вышло — "
+                "покажи пользователю эту ошибку как есть.]"
+            )
 
     await audit.log(
         ctx.session,

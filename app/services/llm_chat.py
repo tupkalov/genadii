@@ -182,14 +182,16 @@ async def generate_reply(
             on_delta(f"{committed_text}{text}")
 
     usages: list[client.LlmResult] = []
+    had_tool_failure = False  # упавший инструмент → чинит сразу smart-модель
     for iteration in range(MAX_TOOL_ITERATIONS):
         # На последней итерации убираем инструменты: модель обязана дать финальный
         # ответ из уже собранного, а не звать очередной tool (иначе — фолбэк).
         last = iteration == MAX_TOOL_ITERATIONS - 1
         round_tools = None if last else tool_schemas
-        round_model = (
-            smart_model if can_escalate and iteration >= ESCALATE_AFTER_ITERATIONS else model
+        escalated = can_escalate and (
+            iteration >= ESCALATE_AFTER_ITERATIONS or had_tool_failure
         )
+        round_model = smart_model if escalated else model
 
         try:
             if round_delta is not None:
@@ -255,6 +257,10 @@ async def generate_reply(
         messages.append(result.raw_message)
         for tool_call in result.tool_calls:
             output = await execute_tool_call(ctx, tool_call)
+            # Маркеры наших failure-nudge'ей: со следующего раунда — smart-модель,
+            # дешёвая при починке кода плодит новые баги вместо исправления
+            if "[Код упал" in output or "[Разберись с причиной" in output:
+                had_tool_failure = True
             messages.append(
                 {
                     "role": "tool",

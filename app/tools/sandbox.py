@@ -15,6 +15,29 @@ FAILURE_NUDGE = (
     "ЗАПРЕЩЕНО. Не смог починить — покажи пользователю эту ошибку как есть.]"
 )
 
+# Эти исключения — всегда баг сгенерированного кода, внешний сервис ни при чём
+_CODE_BUG_MARKERS = (
+    "NameError",
+    "SyntaxError",
+    "TypeError",
+    "KeyError",
+    "AttributeError",
+    "IndexError",
+    "IndentationError",
+    "UnboundLocalError",
+)
+
+
+def failure_nudge(stderr: str) -> str:
+    nudge = FAILURE_NUDGE
+    if any(marker in stderr for marker in _CODE_BUG_MARKERS):
+        nudge += (
+            "\n[Судя по типу исключения, это баг в ТВОЁМ коде, а не проблема "
+            "внешнего API или сервиса. НЕ говори пользователю, что «сервис "
+            "нестабилен» или «API глючит» — почини свой код.]"
+        )
+    return nudge
+
 
 async def _run_python(ctx: ToolContext, code: str) -> str:
     if len(code) > CODE_LIMIT:
@@ -41,7 +64,7 @@ async def _run_python(ctx: ToolContext, code: str) -> str:
     result = "\n".join(parts)
     result = result[:RESULT_LIMIT] + ("…" if len(result) > RESULT_LIMIT else "")
     if data["exit_code"] != 0:
-        result += FAILURE_NUDGE
+        result += failure_nudge(data.get("stderr") or "")
     return result
 
 

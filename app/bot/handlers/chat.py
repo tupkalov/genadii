@@ -79,15 +79,22 @@ class _StreamEditor:
 
     def feed(self, text: str) -> None:
         self.latest = text
-        if time.monotonic() - self.last_edit >= self.interval and not self._flush_scheduled:
-            self._flush_scheduled = True
-            asyncio.create_task(self._flush())
+        if self._flush_scheduled:
+            return
+        self._flush_scheduled = True
+        # Даже если интервал ещё не истёк — планируем правку на его остаток:
+        # иначе хвост текста (последние куски раунда) не показался бы никогда
+        delay = max(0.0, self.interval - (time.monotonic() - self.last_edit))
+        asyncio.create_task(self._flush(delay))
 
-    async def _flush(self) -> None:
+    async def _flush(self, delay: float = 0.0) -> None:
+        if delay > 0:
+            await asyncio.sleep(delay)
         async with self._lock:
             self._flush_scheduled = False
             self.last_edit = time.monotonic()
-            text = self.latest.strip()[:3900]
+            # Показываем хвост: при длинных размышлениях свежее важнее начала
+            text = self.latest.strip()[-3900:]
             if not text:
                 return
             try:

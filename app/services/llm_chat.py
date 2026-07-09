@@ -172,6 +172,15 @@ async def generate_reply(
     )
 
     # Стриминг всегда, когда дан on_delta; мультимодальный ход тоже поддерживает stream.
+    # Черновик накапливает текст всех раундов: мысли предыдущего раунда не
+    # затираются стримом следующего, а между раундами видно, какие инструменты
+    # работают, — иначе сообщение «обрывается» и висит до финала.
+    committed_text = ""
+    round_delta = None
+    if on_delta is not None:
+        def round_delta(text: str) -> None:  # noqa: E306
+            on_delta(f"{committed_text}{text}")
+
     usages: list[client.LlmResult] = []
     for iteration in range(MAX_TOOL_ITERATIONS):
         # На последней итерации убираем инструменты: модель обязана дать финальный
@@ -183,9 +192,9 @@ async def generate_reply(
         )
 
         try:
-            if on_delta is not None:
+            if round_delta is not None:
                 result = await client.chat_stream(
-                    messages, round_model, tools=round_tools, on_delta=on_delta
+                    messages, round_model, tools=round_tools, on_delta=round_delta
                 )
             else:
                 result = await client.chat(messages, round_model, tools=round_tools)
@@ -198,9 +207,9 @@ async def generate_reply(
                 "Smart-модель %s упала, откатываюсь на %s", round_model, model
             )
             can_escalate = False
-            if on_delta is not None:
+            if round_delta is not None:
                 result = await client.chat_stream(
-                    messages, model, tools=round_tools, on_delta=on_delta
+                    messages, model, tools=round_tools, on_delta=round_delta
                 )
             else:
                 result = await client.chat(messages, model, tools=round_tools)
@@ -232,6 +241,16 @@ async def generate_reply(
             return ChatOutcome(
                 text=result.content, usages=usages, attachments=ctx.attachments
             )
+
+        # Раунд закончился вызовом инструментов: фиксируем его мысли в черновике
+        # и показываем, что сейчас происходит, — иначе долгая пауза без движения
+        if result.content.strip():
+            committed_text += result.content.strip() + "\n\n"
+        if round_delta is not None:
+            tool_names = ", ".join(
+                tc.get("function", {}).get("name", "?") for tc in result.tool_calls
+            )
+            round_delta(f"⚙️ {tool_names}…")
 
         messages.append(result.raw_message)
         for tool_call in result.tool_calls:

@@ -7,7 +7,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy import delete, select
 
-from app.db.models import McpServer, User, UserRole, Workspace
+from app.db.models import McpServer, User, Workspace
 from app.services import audit, mcp, mcp_auth, messages
 
 router = Router(name="mcp")
@@ -226,26 +226,25 @@ async def cmd_mcp(
     session,
     command: CommandObject,
 ) -> None:
-    if user.role != UserRole.admin:
-        text = "Управлять MCP-серверами может только админ. 🙅"
+    # Доступно любому участнику воркспейса (whitelist гарантирует middleware);
+    # авторство фиксируется в audit_log
+    args = (command.args or "").split()
+    sub = args[0].lower() if args else "list"
+    rest = args[1:]
+    if sub == "add":
+        text = await _cmd_add(session, workspace, user, rest, message)
+    elif sub == "list":
+        text = await _cmd_list(session, workspace)
+    elif sub in ("on", "off") and rest:
+        text = await _cmd_toggle(session, workspace, user, rest[0].lower(), sub == "on")
+    elif sub == "auth" and rest:
+        text = await _cmd_auth(session, workspace, user, rest[0].lower(), message)
+    elif sub == "remove" and rest:
+        text = await _cmd_remove(session, workspace, user, rest[0].lower())
+    elif sub == "refresh":
+        text = await _cmd_refresh(session, workspace, user)
     else:
-        args = (command.args or "").split()
-        sub = args[0].lower() if args else "list"
-        rest = args[1:]
-        if sub == "add":
-            text = await _cmd_add(session, workspace, user, rest, message)
-        elif sub == "list":
-            text = await _cmd_list(session, workspace)
-        elif sub in ("on", "off") and rest:
-            text = await _cmd_toggle(session, workspace, user, rest[0].lower(), sub == "on")
-        elif sub == "auth" and rest:
-            text = await _cmd_auth(session, workspace, user, rest[0].lower(), message)
-        elif sub == "remove" and rest:
-            text = await _cmd_remove(session, workspace, user, rest[0].lower())
-        elif sub == "refresh":
-            text = await _cmd_refresh(session, workspace, user)
-        else:
-            text = USAGE
+        text = USAGE
 
     sent = await message.answer(text)
     await messages.save_assistant(session, workspace, text, tg_message_id=sent.message_id)

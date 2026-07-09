@@ -7,7 +7,7 @@ from aiogram.types import Message
 from sqlalchemy import delete, select
 
 from app.config import get_settings
-from app.db.models import User, UserRole, Webhook, Workspace
+from app.db.models import User, Webhook, Workspace
 from app.services import audit, messages, skills
 
 router = Router(name="webhooks")
@@ -154,24 +154,21 @@ async def cmd_hook(
     session,
     command: CommandObject,
 ) -> None:
-    if user.role != UserRole.admin:
-        text = "Управлять вебхуками может только админ. 🙅"
+    # Доступно любому участнику воркспейса (whitelist гарантирует middleware);
+    # авторство фиксируется в audit_log
+    args = (command.args or "").split()
+    sub = args[0].lower() if args else "list"
+    rest = args[1:]
+    if sub == "add":
+        text = await _cmd_add(session, workspace, user, rest)
+    elif sub == "list":
+        text = await _cmd_list(session, workspace)
+    elif sub in ("on", "off") and rest:
+        text = await _cmd_toggle(session, workspace, user, rest[0].lower(), sub == "on")
+    elif sub == "delete" and rest:
+        text = await _cmd_delete(session, workspace, user, rest[0].lower())
     else:
-        args = (command.args or "").split()
-        sub = args[0].lower() if args else "list"
-        rest = args[1:]
-        if sub == "add":
-            text = await _cmd_add(session, workspace, user, rest)
-        elif sub == "list":
-            text = await _cmd_list(session, workspace)
-        elif sub in ("on", "off") and rest:
-            text = await _cmd_toggle(
-                session, workspace, user, rest[0].lower(), sub == "on"
-            )
-        elif sub == "delete" and rest:
-            text = await _cmd_delete(session, workspace, user, rest[0].lower())
-        else:
-            text = USAGE
+        text = USAGE
 
     sent = await message.answer(text)
     await messages.save_assistant(session, workspace, text, tg_message_id=sent.message_id)

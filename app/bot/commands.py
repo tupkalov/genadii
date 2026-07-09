@@ -21,6 +21,8 @@ COMMON_COMMANDS = [
     BotCommand(command="stats", description="Расходы этого чата"),
     BotCommand(command="budget", description="Месячный лимит расходов"),
     BotCommand(command="skill", description="Скиллы этого чата (сценарии /имя)"),
+    BotCommand(command="mcp", description="MCP-серверы этого чата"),
+    BotCommand(command="hook", description="Входящие вебхуки этого чата"),
     BotCommand(command="undo", description="Стереть последний обмен из истории"),
     BotCommand(command="retry", description="Перегенерировать ответ (/retry smart)"),
     BotCommand(command="search", description="Поиск по памяти и переписке"),
@@ -31,8 +33,6 @@ ADMIN_COMMANDS = [
     BotCommand(command="kick", description="Убрать из whitelist: id или reply"),
     BotCommand(command="users", description="Список пользователей"),
     BotCommand(command="dashboard", description="Как открыть веб-дашборд"),
-    BotCommand(command="mcp", description="MCP-серверы этого чата"),
-    BotCommand(command="hook", description="Входящие вебхуки этого чата"),
 ]
 
 

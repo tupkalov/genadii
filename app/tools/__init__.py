@@ -1,4 +1,5 @@
 # Импорт модулей с register(...) наполняет реестр
+import app.tools.help  # noqa: F401
 import app.tools.history  # noqa: F401
 import app.tools.images  # noqa: F401
 import app.tools.memory  # noqa: F401

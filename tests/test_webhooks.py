@@ -96,6 +96,40 @@ async def test_agent_mode_creates_scheduled_task(session, workspace, user, clien
     await _cleanup(session, workspace)
 
 
+async def test_skill_bound_hook_creates_skill_task(session, workspace, user, client):
+    from app.db.models import Skill
+
+    skill = Skill(
+        workspace_id=workspace.id,
+        name="deploy-skill",
+        instruction="Проверь статус и сообщи",
+        allowed_tools=["web_search"],
+        created_by_id=user.id,
+    )
+    session.add(skill)
+    await session.flush()
+    hook = await _add_hook(session, workspace, user, mode="agent", name="skillhook")
+    hook.skill_id = skill.id
+    await session.commit()
+
+    async with client:
+        resp = await client.post(f"/hooks/{hook.token}", json={"build": 7})
+    assert resp.status_code == 200
+
+    task = await session.scalar(
+        select(ScheduledTask).where(
+            ScheduledTask.workspace_id == workspace.id,
+            ScheduledTask.status == "pending",
+        )
+    )
+    assert task.payload["skill_id"] == skill.id
+    assert '"build": 7' in task.payload["event"]
+
+    await _cleanup(session, workspace)
+    await session.execute(delete(Skill).where(Skill.id == skill.id))
+    await session.commit()
+
+
 async def test_unknown_token_404(client):
     async with client:
         resp = await client.post("/hooks/definitely-not-a-token", json={})

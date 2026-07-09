@@ -67,16 +67,26 @@ async def receive_hook(token: str, request: Request) -> Response:
             payload = body.decode("utf-8", errors="replace")
 
         if hook.mode == "agent":
-            text = (
-                f"{hook.instruction or 'Обработай событие вебхука и напиши результат.'}"
-                f"\n\nДанные вебхука «{hook.name}»:\n{_pretty(payload)[:AGENT_PAYLOAD_LIMIT]}"
-            )
+            event = _pretty(payload)[:AGENT_PAYLOAD_LIMIT]
+            task_payload: dict = {"user_name": f"вебхук «{hook.name}»"}
+            if hook.skill_id:
+                # Обработчик — скилл: инструкция и allowlist подставятся воркером
+                task_payload |= {
+                    "skill_id": hook.skill_id,
+                    "text": f"вебхук «{hook.name}» → скилл",
+                    "event": event,
+                }
+            else:
+                task_payload["text"] = (
+                    f"{hook.instruction or 'Обработай событие вебхука и напиши результат.'}"
+                    f"\n\nДанные вебхука «{hook.name}»:\n{event}"
+                )
             session.add(
                 ScheduledTask(
                     workspace_id=hook.workspace_id,
                     user_id=hook.created_by_id,
                     kind="agent_task",
-                    payload={"text": text, "user_name": f"вебхук «{hook.name}»"},
+                    payload=task_payload,
                     run_at=datetime.now(timezone.utc),
                     status="pending",
                 )

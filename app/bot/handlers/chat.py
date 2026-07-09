@@ -126,6 +126,7 @@ async def _generate_and_send(
     session: AsyncSession,
     extra_user_message: str | list[dict] | None = None,
     force_model: str | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> None:
     """Общий пайплайн: бюджет -> LLM (с tools, стриминг) -> ответ + вложения -> учёт."""
     if await _check_budget(message, session, workspace):
@@ -170,6 +171,7 @@ async def _generate_and_send(
             target_message_id=message.message_id,
             on_delta=on_delta,
             force_model=force_model,
+            allowed_tools=allowed_tools,
         )
     except LlmError as exc:
         logger.error("LLM error (workspace=%s): %s", workspace.id, exc)

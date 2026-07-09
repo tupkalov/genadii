@@ -20,6 +20,7 @@ COMMON_COMMANDS = [
     BotCommand(command="digest", description="Ежедневный отчёт расходов в личку"),
     BotCommand(command="stats", description="Расходы этого чата"),
     BotCommand(command="budget", description="Месячный лимит расходов"),
+    BotCommand(command="skill", description="Скиллы этого чата (сценарии /имя)"),
     BotCommand(command="undo", description="Стереть последний обмен из истории"),
     BotCommand(command="retry", description="Перегенерировать ответ (/retry smart)"),
     BotCommand(command="search", description="Поиск по памяти и переписке"),

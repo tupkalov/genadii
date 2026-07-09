@@ -14,7 +14,7 @@ from app.db.models import ScheduledTask, User, Workspace
 from app.db.session import session_factory
 from app.llm import http as llm_http
 from app.llm.client import LlmError
-from app.services import alerts, budget, llm_chat, messages, reminders
+from app.services import alerts, budget, llm_chat, messages, reminders, skills
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gennady.worker")
@@ -80,16 +80,36 @@ async def _run_agent_task(
 
     payload = task.payload or {}
     user = await session.get(User, task.user_id)
+
+    allowed_tools = None
+    if payload.get("skill_id"):
+        # Задача-скилл: инструкция и allowlist берутся из скилла в момент
+        # выполнения — правки скилла подхватываются без пересоздания задач
+        from app.db.models import Skill
+
+        skill = await session.get(Skill, payload["skill_id"])
+        if skill is None or not skill.enabled:
+            await _send_and_log(
+                bot, session, workspace,
+                f"⚠️ Задача #{task.id}: скилл удалён или выключен — пропускаю.",
+            )
+            return
+        body = skills.build_prompt(skill, payload.get("event"))
+        allowed_tools = skill.allowed_tools
+    else:
+        body = payload.get("text", "")
+
     instruction = (
         f"[Запланированная задача #{task.id}, поставил(а) "
         f"{payload.get('user_name') or 'кто-то из чата'}. Выполни и напиши результат "
         "в чат. Ты работаешь без присмотра: если инструмент падает — почини и "
         "перезапусти прямо сейчас; данные только из результатов инструментов, "
         "ничего не выдумывай; не обещай доделать позже.]\n"
-        f"{payload.get('text', '')}"
+        f"{body}"
     )
     outcome = await llm_chat.generate_reply(
-        session, workspace, user, extra_user_message=instruction
+        session, workspace, user, extra_user_message=instruction,
+        allowed_tools=allowed_tools,
     )
     text = outcome.text.strip() or "…"
     sent = await send_rendered(bot, workspace.tg_chat_id, text)

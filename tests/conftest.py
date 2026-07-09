@@ -9,6 +9,7 @@ from app.db.models import (
     Message,
     SavedScript,
     ScheduledTask,
+    Skill,
     User,
     Webhook,
     Workspace,
@@ -68,5 +69,6 @@ async def user(session):
     await session.execute(delete(MemoryEntry).where(MemoryEntry.created_by_id == u.id))
     await session.execute(delete(Webhook).where(Webhook.created_by_id == u.id))
     await session.execute(delete(McpServer).where(McpServer.created_by_id == u.id))
+    await session.execute(delete(Skill).where(Skill.created_by_id == u.id))
     await session.execute(delete(User).where(User.id == u.id))
     await session.commit()

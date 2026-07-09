@@ -17,7 +17,7 @@ from app.db.models import (
 )
 from app.llm import client
 from app.llm.prompts import build_system_prompt
-from app.services import mcp, memory
+from app.services import mcp, memory, skills as skills_service
 from app.tools import permissions
 from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
@@ -143,6 +143,7 @@ async def generate_reply(
     target_message_id: int | None = None,
     on_delta=None,
     force_model: str | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> ChatOutcome:
     """Контекст + tool-calling цикл. Входящее сообщение уже в истории.
 
@@ -150,9 +151,11 @@ async def generate_reply(
     мультимодальный режим — ход выполняет vision-модель.
     bot/chat_id/target_message_id пробрасываются в tools (реакции).
     force_model — разовый оверрайд модели (напр. /retry smart).
+    allowed_tools — allowlist имён/масок для этого хода (скиллы): None — все.
     """
     tools = await permissions.enabled_tools(session, workspace)
     tools = tools + await mcp.workspace_mcp_tools(session, workspace)
+    tools = skills_service.filter_tools(tools, allowed_tools)
     messages = await _build_messages(session, workspace, extra_user_message, tools, user)
     is_multimodal = isinstance(extra_user_message, list)
     model = force_model or pick_model(workspace, multimodal=is_multimodal)

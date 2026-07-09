@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 
 from app.config import get_settings
 from app.db.models import User, UserRole, Webhook, Workspace
-from app.services import audit, messages
+from app.services import audit, messages, skills
 
 router = Router(name="webhooks")
 
@@ -16,6 +16,7 @@ USAGE = (
     "Входящие вебхуки этого чата. Команды:\n"
     "<code>/hook add имя</code> — просто уведомлять о событиях\n"
     "<code>/hook add имя инструкция…</code> — реагировать как агент\n"
+    "<code>/hook add имя skill:имя-скилла</code> — обрабатывать скиллом\n"
     "<code>/hook list</code>, <code>/hook on|off имя</code>, "
     "<code>/hook delete имя</code>"
 )
@@ -38,18 +39,34 @@ async def _get_hook(session, workspace: Workspace, name: str) -> Webhook | None:
 
 async def _cmd_add(session, workspace, user, args: list[str]) -> str:
     if not args:
-        return "Формат: <code>/hook add имя [инструкция…]</code>"
+        return (
+            "Формат: <code>/hook add имя [инструкция…]</code>\n"
+            "или <code>/hook add имя skill:имя-скилла</code>"
+        )
     name = args[0].lower()[:64]
     instruction = " ".join(args[1:]).strip() or None
     if await _get_hook(session, workspace, name) is not None:
         return f"Хук «{html.escape(name)}» уже есть — сначала /hook delete."
 
+    skill_id = None
+    if instruction and instruction.startswith("skill:"):
+        skill_name = instruction.removeprefix("skill:").strip().lower()
+        skill = await skills.get_by_name(session, workspace, skill_name)
+        if skill is None:
+            return (
+                f"Скилла «{html.escape(skill_name)}» нет в этом чате — "
+                "сначала создай: /skill add"
+            )
+        skill_id = skill.id
+        instruction = None
+
     hook = Webhook(
         workspace_id=workspace.id,
         name=name,
         token=secrets.token_urlsafe(24),
-        mode="agent" if instruction else "notify",
+        mode="agent" if (instruction or skill_id) else "notify",
         instruction=instruction,
+        skill_id=skill_id,
         created_by_id=user.id,
     )
     session.add(hook)
@@ -61,11 +78,12 @@ async def _cmd_add(session, workspace, user, args: list[str]) -> str:
         workspace_id=workspace.id,
         user_id=user.id,
     )
-    mode_note = (
-        f"агентский — на каждое событие выполню:\n«{html.escape(instruction)}»"
-        if instruction
-        else "уведомления — буду пересылать события в чат"
-    )
+    if skill_id:
+        mode_note = "агентский — каждое событие обрабатывает скилл"
+    elif instruction:
+        mode_note = f"агентский — на каждое событие выполню:\n«{html.escape(instruction)}»"
+    else:
+        mode_note = "уведомления — буду пересылать события в чат"
     return (
         f"Создал хук «{html.escape(name)}» ({mode_note}).\n\n"
         f"POST-адрес:\n<code>{html.escape(_hook_url(hook.token))}</code>"

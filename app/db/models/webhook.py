@@ -33,6 +33,10 @@ class Webhook(Base):
     token: Mapped[str] = mapped_column(String(64))
     mode: Mapped[str] = mapped_column(String(16), default="notify")  # notify | agent
     instruction: Mapped[str | None] = mapped_column(Text)
+    # Привязка к скиллу: событие обрабатывается его инструкцией и allowlist'ом
+    skill_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skills.id", ondelete="SET NULL")
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

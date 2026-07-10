@@ -1,7 +1,39 @@
 # Умный Геннадий 🧠
 
-Self-hosted Telegram AI bot для владельца и его друзей.
-Архитектура и план — в [ARCHITECTURE.md](ARCHITECTURE.md).
+Self-hosted Telegram AI-бот для владельца и его друзей: общение с памятью,
+инструменты (веб, код, картинки), интеграции с внешними сервисами (MCP,
+вебхуки), скиллы-сценарии и учёт расходов. Всё живёт per-чат (workspace).
+
+Дизайн — [ARCHITECTURE.md](ARCHITECTURE.md). Инструкции для Claude Code —
+[CLAUDE.md](CLAUDE.md). Полный список возможностей — `app/llm/capabilities.py`
+(бот сам отвечает на «что ты умеешь?»).
+
+## Возможности
+
+- **Чат**: стриминг ответов, debounce серии сообщений, группы (меншен/reply,
+  контекст реплаев и форвардов), персона на чат, проактивные реплики.
+- **Мультимодальность**: голосовые, фото (vision), документы PDF/DOCX/TXT,
+  генерация картинок.
+- **Память**: авто-запоминание фактов, семантический поиск (pgvector + HNSW),
+  дедуп похожих фактов, `/memory`, `/forget`, `/search`.
+- **Задачи**: напоминания и агент-задачи (one-shot и cron), `/tasks`.
+- **Код**: Python-песочница (изолированный контейнер), сохраняемые скрипты.
+- **Скиллы**: именованные сценарии с ограничением инструментов (allowlist,
+  маски `mcp_x_*`); запуск через `/имя`, вебхуком, по cron или самим ботом.
+- **MCP-клиент**: `/mcp add имя url [токен]` — инструменты любого
+  Streamable-HTTP MCP-сервера доступны боту; OAuth-серверы авторизуются
+  через браузер (`/mcp auth`); stdio-серверы — через supergateway-sidecar
+  (шаблон в docker-compose.yml).
+- **Входящие вебхуки**: `/hook add имя [инструкция|skill:имя]` — публичный
+  URL, события уведомляют чат или запускают агентский ход/скилл.
+- **Деньги**: учёт каждого LLM-вызова, `/stats` (+топ участников),
+  месячные лимиты `/budget`, ежедневный дайджест `/digest`.
+- **Надёжность**: retry с backoff, эскалация на reasoning-модель при
+  зацикливании/ошибках кода, алерты админу при повторных сбоях,
+  суточные бэкапы Postgres.
+- **Безопасность**: whitelist в БД, per-workspace изоляция, песочница без
+  доступа к данным, SSRF-защита, санитайзер секретов в ошибках, пометка
+  внешнего контента как «данные, не инструкции», rate-limit'ы инструментов.
 
 ## Быстрый старт
 
@@ -10,8 +42,9 @@ Self-hosted Telegram AI bot для владельца и его друзей.
 3. Настрой окружение:
 
 ```bash
-cp .env.example .env
-# отредактируй .env: BOT_TOKEN, ADMIN_TG_IDS, POSTGRES_PASSWORD (+ тот же пароль в DATABASE_URL)
+cp .env.example .env && chmod 600 .env
+# минимум: BOT_TOKEN, ADMIN_TG_IDS, POSTGRES_PASSWORD (+ тот же пароль в DATABASE_URL),
+# OPENROUTER_API_KEY; для вебхуков/OAuth: WEBHOOK_BASE_URL + домен на этот сервер
 ```
 
 4. Запусти:
@@ -20,52 +53,47 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-Миграции применяются автоматически при старте контейнера `app`.
+Миграции применяются автоматически при старте `app`. Caddy сам выпускает
+Let's Encrypt-сертификат для домена из Caddyfile (наружу проксируются только
+`/hooks/*` и `/oauth/*`; дашборд — `localhost:8000`, попасть можно SSH-туннелем).
 
-## Проверка (Milestone 1–2)
+## Сервисы (docker compose)
 
-| Что | Как | Ожидание |
-|---|---|---|
-| Сервисы живы | `docker compose ps` | все `running (healthy)` |
-| Health | `curl localhost:8000/health` | `{"status":"ok","db":true,"redis":true}` |
-| Бот отвечает | `/start` в личке | приветствие Геннадия |
-| Твоя роль | `/whoami` | роль `admin`, workspace `personal` |
-| Групповой workspace | добавить бота в группу, `/whoami` там | workspace `group` |
-| Сообщения пишутся | см. ниже | строки в таблице `messages` |
-| Whitelist | написать боту с чужого аккаунта | отказ + запись `access_denied` в `audit_log` |
+| Сервис | Что делает |
+|---|---|
+| `app` | FastAPI + aiogram-поллинг (один процесс) |
+| `worker` | arq: свип задач (20с), дайджесты, сжатие истории, доиндексация памяти |
+| `postgres` | PostgreSQL 16 + pgvector |
+| `redis` | FSM, rate-limit'ы, кэши (эмбеддинги, MCP-инструменты) |
+| `sandbox` | изолированный Python-runner (отдельная сеть, read-only, без root) |
+| `caddy` | публичный HTTPS-вход для вебхуков и OAuth-callback |
+| `pg_backup` | суточный pg_dump в `./backups`, ротация 7 дней |
 
-Заглянуть в БД:
-
-```bash
-docker compose exec postgres psql -U gennady -d gennady \
-  -c "SELECT id, workspace_id, role, left(content, 40) AS content, created_at FROM messages ORDER BY id DESC LIMIT 10;"
-
-docker compose exec postgres psql -U gennady -d gennady \
-  -c "SELECT action, payload, created_at FROM audit_log ORDER BY id DESC LIMIT 10;"
-```
-
-Логи приложения:
+## Разработка
 
 ```bash
+# тесты (реальная БД/Redis внутри compose):
+docker compose exec -u root app pip install -e ".[dev]"
+docker compose exec app pytest -v
+
+# логи и БД:
 docker compose logs -f app
+docker compose exec postgres psql -U gennady -d gennady
 ```
 
-## Статус milestone'ов
+После правок кода: `docker compose build app worker && docker compose up -d`.
+Подробные конвенции — в [CLAUDE.md](CLAUDE.md).
 
-- [x] M1 — каркас, Docker Compose, config, FastAPI, aiogram, Postgres/Redis
-- [x] M2 — модели, миграции, whitelist, `/start`, `/whoami`, workspace resolver, сохранение сообщений
-- [x] M3 — OpenRouter, персона per-workspace, `/persona`, `/model`, `/stats`, учёт расходов (`llm_usage`, API `/stats/usage`)
-- [x] M4 — tool-каркас (registry, permissions, audit), память: remember/recall tools, `/memory`, `/forget`, pgvector (semantic при наличии `OPENAI_API_KEY`, иначе текстовый поиск)
-- [x] M5 — напоминания: tool `remind`, `/tasks [cancel N]`, arq-worker (sweeper по БД каждые 20 сек)
-- [x] M5.5 — инвайты (`/invite`, `/kick`, `/users`), ошибки в чат (global error handler), самопробуждение: tool `schedule_task` (one-shot и cron) — worker выполняет LLM-ход с инструментами и пишет результат в чат
-- [x] M6 — tools `web_search` (Tavily) + `fetch_url` (с SSRF-защитой)
-- [x] M7 — sandbox-runner: tool `run_python` (выключен по умолчанию — `/tools enable run_python`), изолированный контейнер: отдельная сеть без доступа к БД/Redis, read-only ФС, без root, cap_drop ALL, лимиты CPU/RAM/pids, таймаут 30с
-- [x] M8 — markdown-рендеринг ответов (MD→Telegram HTML с фолбэком), месячные лимиты расходов (`/budget`, enforcement в чате и в worker'е), API `GET /logs/audit`
-- [x] Итерация 1 (надёжность) — API на localhost, восстановление зависших задач, ON CONFLICT на создании user/workspace, healthchecks всех сервисов, суточные бэкапы Postgres (`./backups`, 7 дней), retry+доиндексация embeddings, лимит кода sandbox 100КБ
-- [x] Итерация 2 (медиа) — vision (фото понимает, `VISION_MODEL`), голосовые (транскрипция, `AUDIO_MODEL`), генерация картинок (tool `generate_image`, выкл. по умолчанию, `IMAGE_MODEL`), метаданные форвардов в контексте + `/invite` по reply на пересланное сообщение
-- [x] Итерация 3 (интеллект) — tool `read_chat_history` («что я пропустил?»), ежечасное сжатие старой истории в сводку (`history_summary` в settings, экономия токенов), сохраняемые скрипты: tools `save_script`/`run_saved_script`/`list_scripts` (выкл. по умолчанию), `/scripts [show|delete]`, миграция `0002`
-- [x] Итерация 4 (фундамент) — git, правки сообщений, миграция группы в супергруппу, throttle на пользователя, лог-ротация
-- [x] Итерация 5 (живость) — авто-память, эмодзи-реакции (tool `react`), проактивность (`/proactive N%`)
-- [x] Итерация 6 (UX) — стриминг ответов, документы PDF/DOCX/TXT
-- [x] Итерация 7 (обзорность) — дайджест-отчёт расходов в личку (`/digest 21:00|now|off`, кто/где/сколько), веб-дашборд на `localhost:8000/`
-- [x] Итерация 8 (безопасность) — защита от prompt-injection (внешний контент помечен как данные), rate-limit дорогих tools (generate_image 15/ч, run_python/web_search 40/ч на юзера), ручная валидация редиректов в fetch_url (SSRF), лимит длины факта
+## История
+
+Milestone'ы M1–M8 и итерации 1–8 (каркас → медиа → интеллект → безопасность)
+описаны в истории git. Дальше:
+
+- Итерации 9–10 — тесты (pytest-инфра), retry LLM-вызовов, алерты админу,
+  эскалация модели, дедуп памяти + ранжирование по релевантности.
+- Итерация 11 — аудит: callback'и через middleware, экранирование HTML,
+  санитайзер ошибок, non-root контейнеры, атомарный захват задач, общий
+  httpx-клиент, HNSW-индекс, кэш эмбеддингов; `/undo`, `/retry`, `/search`.
+- Итерация 12 — MCP-клиент (+OAuth через браузер), входящие вебхуки, Caddy.
+- Итерация 13 — скиллы (сценарии с allowlist'ом инструментов), доступ к
+  интеграциям всем участникам, самопознание бота (`bot_help`).

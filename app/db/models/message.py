@@ -30,6 +30,9 @@ class Message(Base):
         Enum(MessageRole, native_enum=False, length=16)
     )
     content: Mapped[str] = mapped_column(Text)
+    # file_id вложения (фото) — чтобы перекачать картинку из истории в vision,
+    # когда о ней спрашивают позже без реплая. Хранится только сам id.
+    media_file_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

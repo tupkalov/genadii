@@ -3,6 +3,7 @@ import base64
 import html
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -301,9 +302,24 @@ async def _maybe_proactive(
     await llm_chat.log_usages(session, workspace, outcome.usages, message_id=saved.id, user_id=user.id)
 
 
-async def _photo_extra(message: Message, file_id: str) -> list[dict]:
-    """Скачивает фото и оформляет как мультимодальную часть для vision-модели."""
-    file = await message.bot.download(file_id)
+# Упоминание картинки в тексте: спрашивают «что на фото», не приложив её и не
+# зареплаив — тогда подтягиваем последнее фото из истории (см. on_text).
+_PHOTO_REF_RE = re.compile(
+    r"фот|сним|картинк|изображени|скрин|пикч|photo|image", re.IGNORECASE
+)
+
+
+async def _photo_extra(message: Message, file_id: str) -> list[dict] | None:
+    """Скачивает фото и оформляет как мультимодальную часть для vision-модели.
+
+    Возвращает None, если файл не скачался (например, старый file_id протух) —
+    пусть бот ответит честно «не вижу», а не падает.
+    """
+    try:
+        file = await message.bot.download(file_id)
+    except Exception:
+        logger.warning("Не смог скачать фото %s для vision", file_id[:16])
+        return None
     encoded = base64.b64encode(file.read()).decode()
     return [
         {"type": "text", "text": "Изображение из сообщения:"},
@@ -335,6 +351,15 @@ async def on_text(
     reply = message.reply_to_message
     if reply and reply.photo:
         extras = await _photo_extra(message, reply.photo[-1].file_id)
+    elif _PHOTO_REF_RE.search(message.text or ""):
+        # Про фото спрашивают без реплая («сколько на фотке глютена»), а картинку
+        # скинули парой сообщений выше. Если в этой серии фото ещё не приложено
+        # (его добавил бы on_photo) — берём последнее свежее фото из истории.
+        pending = _pending.get(message.chat.id)
+        if not (pending and pending.extras):
+            file_id = await messages.latest_photo_file_id(session, workspace)
+            if file_id:
+                extras = await _photo_extra(message, file_id)
 
     _schedule_reply(message, user.id, workspace.id, extras=extras)
 

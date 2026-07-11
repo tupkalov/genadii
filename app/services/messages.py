@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from aiogram.types import (
     Message as TgMessage,
     MessageOrigin,
@@ -72,6 +74,7 @@ async def save_incoming(
     session: AsyncSession, workspace: Workspace, user: User, tg_message: TgMessage
 ) -> Message | None:
     content = tg_message.text or tg_message.caption
+    media_file_id = tg_message.photo[-1].file_id if tg_message.photo else None
     if tg_message.photo:
         content = "[фото]" + (f" {content}" if content else "")
     if not content:
@@ -79,7 +82,12 @@ async def save_incoming(
 
     content = _decorate(tg_message, content)
     return await save_user_text(
-        session, workspace, user, content, tg_message_id=tg_message.message_id
+        session,
+        workspace,
+        user,
+        content,
+        tg_message_id=tg_message.message_id,
+        media_file_id=media_file_id,
     )
 
 
@@ -89,6 +97,7 @@ async def save_user_text(
     user: User,
     content: str,
     tg_message_id: int | None = None,
+    media_file_id: str | None = None,
 ) -> Message:
     message = Message(
         workspace_id=workspace.id,
@@ -96,10 +105,42 @@ async def save_user_text(
         tg_message_id=tg_message_id,
         role=MessageRole.user,
         content=content,
+        media_file_id=media_file_id,
     )
     session.add(message)
     await session.flush()
     return message
+
+
+# Окно «свежести» исторического фото: спрашивают «сколько на фотке» обычно про
+# только что скинутую картинку, а не про снимок недельной давности.
+RECENT_PHOTO_WINDOW = timedelta(minutes=30)
+
+
+async def latest_photo_file_id(
+    session: AsyncSession, workspace: Workspace
+) -> str | None:
+    """file_id последнего фото в чате, если оно свежее (см. RECENT_PHOTO_WINDOW).
+
+    Нужно, когда о фото спрашивают позже и без реплая на него — тогда картинки
+    в текущем ходе нет, но её можно перекачать из истории по сохранённому id.
+    """
+    row = await session.execute(
+        select(Message.media_file_id, Message.created_at)
+        .where(
+            Message.workspace_id == workspace.id,
+            Message.media_file_id.isnot(None),
+        )
+        .order_by(Message.id.desc())
+        .limit(1)
+    )
+    result = row.first()
+    if result is None:
+        return None
+    file_id, created_at = result
+    if datetime.now(created_at.tzinfo) - created_at > RECENT_PHOTO_WINDOW:
+        return None
+    return file_id
 
 
 async def update_edited(

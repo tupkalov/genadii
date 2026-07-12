@@ -103,10 +103,32 @@ def error_text(exc: BaseException, limit: int = 300) -> str:
 
 
 def looks_like_auth_required(exc: BaseException) -> bool:
-    """Эвристика «сервер требует OAuth»: 401/Unauthorized в тексте ошибки
-    (с разворачиванием ExceptionGroup — там прячется настоящий HTTPStatusError)."""
-    text = str(unwrap_error(exc))
-    return "401" in text or "unauthorized" in text.lower()
+    """Сервер требует (пере)авторизации: типизированный ReauthRequired либо
+    401/Unauthorized в тексте (после распаковки TaskGroup)."""
+    inner = unwrap_error(exc)
+    if isinstance(inner, mcp_auth.ReauthRequired):
+        return True
+    text = str(inner).lower()
+    return "401" in text or "unauthorized" in text or "повторной авторизации" in text
+
+
+def reauth_instruction(server_name: str, oauth: bool) -> str:
+    """Терминальная подсказка модели при auth-ошибке MCP: точная команда и
+    запрет выдумывать альтернативы/«сохранять локально». Ретрай тут не поможет —
+    поэтому это не бросается как ошибка, а возвращается как результат."""
+    if oauth:
+        cmd = f"/mcp auth {server_name}"
+        how = f"выполнить ИМЕННО команду {cmd} (откроется браузер для входа)"
+    else:
+        cmd = f"/mcp add {server_name} <url> <новый токен>"
+        how = f"переподключить сервер с новым токеном: {cmd}"
+    return (
+        f"[MCP «{server_name}» требует авторизации — вызвать инструмент нельзя, "
+        f"пока пользователь не переавторизуется. Ретраи бесполезны.]\n"
+        f"Скажи пользователю {how}. Не придумывай других команд (никаких "
+        f"«reauth» и подобных — их нет). Не притворяйся, что действие выполнено, "
+        f"и не обещай «сохранить локально» — ты этого не умеешь."
+    )
 
 
 async def invalidate(server_id: int) -> None:
@@ -161,19 +183,27 @@ def _make_handler(
             if use_oauth and server_id is not None
             else None
         )
-        async with asyncio.timeout(CALL_TIMEOUT):
-            async with streamablehttp_client(
-                url,
-                headers=_headers(auth_token) if auth is None else None,
-                auth=auth,
-            ) as (
-                read,
-                write,
-                _,
-            ):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool(tool_name, kwargs or {})
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT):
+                async with streamablehttp_client(
+                    url,
+                    headers=_headers(auth_token) if auth is None else None,
+                    auth=auth,
+                ) as (
+                    read,
+                    write,
+                    _,
+                ):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool(tool_name, kwargs or {})
+        except Exception as exc:  # noqa: BLE001 — превращаем в ответ модели
+            # OAuth протух — ретраи не помогут; отдаём точную команду
+            # реавторизации вместо голого «TaskGroup», чтобы модель не выдумывала.
+            if looks_like_auth_required(exc):
+                logger.info("MCP «%s»: нужна переавторизация", server_name)
+                return reauth_instruction(server_name, oauth=use_oauth)
+            raise RuntimeError(error_text(exc, 400)) from exc
 
         parts = [
             block.text

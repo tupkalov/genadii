@@ -145,15 +145,20 @@ def interactive_provider(server: McpServer, on_auth_url) -> OAuthClientProvider:
     )
 
 
+class ReauthRequired(RuntimeError):
+    """Сохранённый OAuth-токен протух и требует нового согласия в браузере —
+    обычный (неинтерактивный) вызов так не починить, нужен /mcp auth. Тип, а не
+    текст: SDK заворачивает исключение в anyio TaskGroup, ловим по isinstance."""
+
+
 def stored_provider(server_id: int, server_url: str) -> OAuthClientProvider:
     """Неинтерактивный провайдер (обычные вызовы, воркер): только сохранённые
-    токены + авто-refresh; если сервер требует новую авторизацию — ошибка с
-    подсказкой перезапустить /mcp auth."""
+    токены + авто-refresh; если сервер требует новую авторизацию — ReauthRequired
+    с подсказкой перезапустить /mcp auth."""
 
     async def redirect_handler(auth_url: str) -> None:
-        raise RuntimeError(
-            "MCP-сервер требует повторной авторизации — попроси админа "
-            "выполнить /mcp auth"
+        raise ReauthRequired(
+            "MCP-сервер требует повторной авторизации через /mcp auth"
         )
 
     async def callback_handler() -> tuple[str, str | None]:

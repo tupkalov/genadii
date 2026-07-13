@@ -31,6 +31,9 @@ class McpServer(Base):
     # (обновляются SDK при refresh через DbTokenStorage)
     oauth_client_info: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     oauth_tokens: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # expires_at токена + метаданные auth-сервера (token_endpoint) — чтобы
+    # неинтерактивный провайдер сам обновлял токен по refresh_token
+    oauth_meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     cached_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(

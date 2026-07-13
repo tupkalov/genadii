@@ -292,6 +292,9 @@ async def run_interactive_auth(server_id: int, bot, chat_id: int) -> None:
         tools = await _discover(
             url, auth=provider, timeout=mcp_auth.AUTH_FLOW_TIMEOUT + 30
         )
+        # Метаданные auth-сервера уже обнаружены внутри провайдера — сохраняем,
+        # чтобы будущие фоновые вызовы могли сами обновлять токен по refresh_token
+        await mcp_auth.persist_discovered_metadata(server_id, provider)
     except TimeoutError:
         await bot.send_message(
             chat_id,

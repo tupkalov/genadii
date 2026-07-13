@@ -11,11 +11,17 @@ redirect_handler шлёт ссылку в чат, callback-роут резолв
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlparse
 
 from mcp.client.auth import OAuthClientProvider, TokenStorage
-from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+from mcp.shared.auth import (
+    OAuthClientInformationFull,
+    OAuthClientMetadata,
+    OAuthMetadata,
+    OAuthToken,
+)
 from sqlalchemy import select, update
 
 from app.config import get_settings
@@ -52,10 +58,51 @@ class DbTokenStorage(TokenStorage):
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
         async with session_factory() as session:
+            meta = (
+                await session.scalar(
+                    select(McpServer.oauth_meta).where(McpServer.id == self.server_id)
+                )
+            ) or {}
+            if tokens.expires_in:
+                # Момент истечения по стенным часам — SDK при загрузке из
+                # хранилища его не восстанавливает, а без него refresh не зовётся
+                meta = {**meta, "expires_at": time.time() + int(tokens.expires_in)}
             await session.execute(
                 update(McpServer)
                 .where(McpServer.id == self.server_id)
-                .values(oauth_tokens=tokens.model_dump(mode="json"))
+                .values(oauth_tokens=tokens.model_dump(mode="json"), oauth_meta=meta)
+            )
+            await session.commit()
+
+    async def get_expiry(self) -> float | None:
+        async with session_factory() as session:
+            meta = await session.scalar(
+                select(McpServer.oauth_meta).where(McpServer.id == self.server_id)
+            )
+        return (meta or {}).get("expires_at")
+
+    async def get_auth_metadata(self) -> OAuthMetadata | None:
+        async with session_factory() as session:
+            meta = await session.scalar(
+                select(McpServer.oauth_meta).where(McpServer.id == self.server_id)
+            )
+        asm = (meta or {}).get("auth_server_metadata")
+        return OAuthMetadata.model_validate(asm) if asm else None
+
+    async def set_auth_metadata(self, metadata: OAuthMetadata) -> None:
+        """Метаданные auth-сервера (в т.ч. token_endpoint) — чтобы refresh на
+        свежесозданном провайдере бил в правильный эндпоинт, а не <server>/token."""
+        async with session_factory() as session:
+            meta = (
+                await session.scalar(
+                    select(McpServer.oauth_meta).where(McpServer.id == self.server_id)
+                )
+            ) or {}
+            meta = {**meta, "auth_server_metadata": metadata.model_dump(mode="json")}
+            await session.execute(
+                update(McpServer)
+                .where(McpServer.id == self.server_id)
+                .values(oauth_meta=meta)
             )
             await session.commit()
 
@@ -151,10 +198,37 @@ class ReauthRequired(RuntimeError):
     текст: SDK заворачивает исключение в anyio TaskGroup, ловим по isinstance."""
 
 
+class _StoredProvider(OAuthClientProvider):
+    """Неинтерактивный провайдер (обычные вызовы, воркер): сохранённые токены +
+    авто-refresh по refresh_token.
+
+    Костыль под баг SDK: его _initialize() грузит из хранилища только токены,
+    но НЕ восстанавливает token_expiry_time и метаданные auth-сервера. В итоге
+    is_token_valid() всегда True (срок = None) → refresh не вызывается, летит
+    протухший токен → 401 → требование заново авторизоваться в браузере. Мы
+    досыпаем срок (когда токен реально истёк — SDK сделает refresh) и метаданные
+    (чтобы refresh бил в правильный token_endpoint). Ротацию токенов после
+    refresh SDK персистит сам через storage.set_tokens.
+    """
+
+    def __init__(self, storage: DbTokenStorage, **kwargs):
+        super().__init__(storage=storage, **kwargs)
+        self._db_storage = storage
+
+    async def _initialize(self) -> None:
+        await super()._initialize()
+        metadata = await self._db_storage.get_auth_metadata()
+        if metadata is not None:
+            self.context.oauth_metadata = metadata
+        expiry = await self._db_storage.get_expiry()
+        if self.context.current_tokens is not None and expiry is not None:
+            self.context.token_expiry_time = expiry
+
+
 def stored_provider(server_id: int, server_url: str) -> OAuthClientProvider:
-    """Неинтерактивный провайдер (обычные вызовы, воркер): только сохранённые
-    токены + авто-refresh; если сервер требует новую авторизацию — ReauthRequired
-    с подсказкой перезапустить /mcp auth."""
+    """Неинтерактивный провайдер: сохранённые токены + авто-refresh; если сервер
+    требует новую авторизацию (refresh тоже протух) — ReauthRequired с подсказкой
+    перезапустить /mcp auth."""
 
     async def redirect_handler(auth_url: str) -> None:
         raise ReauthRequired(
@@ -164,13 +238,21 @@ def stored_provider(server_id: int, server_url: str) -> OAuthClientProvider:
     async def callback_handler() -> tuple[str, str | None]:
         raise RuntimeError("OAuth-callback недоступен вне /mcp auth")
 
-    return OAuthClientProvider(
+    return _StoredProvider(
+        storage=DbTokenStorage(server_id),
         server_url=server_url,
         client_metadata=_client_metadata(),
-        storage=DbTokenStorage(server_id),
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
     )
+
+
+async def persist_discovered_metadata(server_id: int, provider: OAuthClientProvider) -> None:
+    """После успешного интерактивного /mcp auth сохраняем метаданные auth-сервера
+    (discovery уже произошёл внутри провайдера) — нужны для будущих refresh'ей."""
+    metadata = getattr(provider.context, "oauth_metadata", None)
+    if metadata is not None:
+        await DbTokenStorage(server_id).set_auth_metadata(metadata)
 
 
 def has_oauth(server: McpServer) -> bool:

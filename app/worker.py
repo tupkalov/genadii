@@ -15,7 +15,16 @@ from app.db.models import ScheduledTask, User, Workspace
 from app.db.session import session_factory
 from app.llm import http as llm_http
 from app.llm.client import LlmError
-from app.services import alerts, budget, heartbeat, llm_chat, messages, reminders, skills
+from app.services import (
+    alerts,
+    audit,
+    budget,
+    heartbeat,
+    llm_chat,
+    messages,
+    reminders,
+    skills,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gennady.worker")
@@ -335,18 +344,32 @@ async def _run_one_heartbeat(
     workspace.settings = {**(workspace.settings or {}), "heartbeat_last": now.isoformat()}
 
     text = outcome.text.strip()
-    if heartbeat.is_silence(text):
-        logger.info("Хартбит ws %s: молчу", workspace.id)
-        return
+    spoke = not heartbeat.is_silence(text)
 
-    sent = await send_rendered(bot, workspace.tg_chat_id, text)
-    saved = await messages.save_assistant(
-        session, workspace, text, tg_message_id=sent.message_id
-    )
+    message_id = None
+    if spoke:
+        sent = await send_rendered(bot, workspace.tg_chat_id, text)
+        saved = await messages.save_assistant(
+            session, workspace, text, tg_message_id=sent.message_id
+        )
+        message_id = saved.id
+
+    # Расход рефлексии учитываем ВСЕГДА — в т.ч. когда смолчал (иначе тихие
+    # размышления жгли бы токены мимо биллинга и бюджета).
     await llm_chat.log_usages(
-        session, workspace, outcome.usages, message_id=saved.id, user_id=user.id
+        session, workspace, outcome.usages, message_id=message_id, user_id=user.id
     )
-    logger.info("Хартбит ws %s: написал первым", workspace.id)
+    # Персистентный след в audit_log: видно, когда хартбит думал и заговорил ли
+    await audit.log(
+        session,
+        action="heartbeat",
+        payload={"spoke": spoke, "initiative": percent},
+        workspace_id=workspace.id,
+        user_id=user.id,
+    )
+    logger.info(
+        "Хартбит ws %s: %s", workspace.id, "написал первым" if spoke else "молчу"
+    )
 
 
 async def run_heartbeats(ctx: dict) -> None:

@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     heartbeat_quiet_start_hour: int = 22  # тихие часы (по settings.timezone): не пишем
     heartbeat_quiet_end_hour: int = 9
 
+    # Субъектность (отдельно от пульса): 0–100% — вероятность, что «тик» хартбита
+    # обернётся реальным сообщением, и насколько спонтанно (0 — никогда не пишет
+    # первым, 100 — компаньон). Пульс задаёт частоту размышлений, initiative —
+    # шанс заговорить. Меняется per-chat (/initiative) и самим ботом на просьбу.
+    initiative_default_percent: int = 30
+
     # Мультимодальность (Итерация 2): дефолт не умеет картинки/аудио,
     # для них подключаются отдельные модели
     vision_model: str = "google/gemini-2.5-flash"

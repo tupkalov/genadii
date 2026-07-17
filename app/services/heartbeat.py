@@ -41,7 +41,8 @@ _INSTRUCTION_HEAD = (
     "- недавно оборвалась тема или кто-то обещал что-то сделать — вернуться к "
     "ней, спросить, как вышло;\n"
     "- в памяти есть повод (планы, событие, «спросить как прошло»);\n"
-    "- очень редко и аккуратно — просто дружеский чек-ин или любопытство.\n\n"
+    "- дружеский чек-ин или любопытство — если позволяет твоя инициативность.\n\n"
+    "{level}\n\n"
     "ГЛАВНОЕ: по умолчанию повода НЕТ. Пиши, только если это правда уместно, "
     "к месту по времени и не выглядит как спам или дежурная болтовня. Не "
     "повторяй то, что уже недавно говорил. Если сомневаешься — молчи.\n\n"
@@ -49,6 +50,27 @@ _INSTRUCTION_HEAD = (
     "Если стоит — напиши одно короткое живое сообщение в своём характере, без "
     "приветствий-заглушек и без пояснений, что это «фоновая проверка».]"
 )
+
+
+def level_hint(percent: int) -> str:
+    """Строка про допустимую спонтанность в зависимости от initiative %."""
+    if percent >= 67:
+        return (
+            "Твоя инициативность ВЫСОКАЯ: можешь написать и просто так — "
+            "поинтересоваться, как дела, поделиться уместной мыслью, вернуться к "
+            "теме. Но по-прежнему только когда это к месту, не ради галочки."
+        )
+    if percent >= 34:
+        return (
+            "Твоя инициативность СРЕДНЯЯ: пиши по реальному поводу (дело, "
+            "оборванная тема, важный факт). Просто чек-ин/болтовня — изредка и "
+            "очень аккуратно."
+        )
+    return (
+        "Твоя инициативность НИЗКАЯ: пиши крайне редко и только по настоящему "
+        "делу (напоминание, важная оборванная тема, значимый факт). Никакой "
+        "праздной болтовни и дежурных «как дела»."
+    )
 
 
 def is_quiet_hours(now_local: datetime, start_hour: int, end_hour: int) -> bool:
@@ -85,6 +107,15 @@ def interval_minutes(workspace: Workspace) -> int:
     if isinstance(override, int) and override > 0:
         return override
     return get_settings().heartbeat_interval_minutes
+
+
+def initiative_percent(workspace: Workspace) -> int:
+    """Субъектность 0–100: шанс, что «тик» обернётся сообщением. Отдельно от
+    пульса — можно держать хартбит включённым, но полностью убрать спонтанность."""
+    raw = (workspace.settings or {}).get("initiative")
+    if isinstance(raw, (int, float)):
+        return max(0, min(100, int(raw)))
+    return get_settings().initiative_default_percent
 
 
 def due_to_reflect(workspace: Workspace, now_utc: datetime) -> bool:
@@ -150,10 +181,11 @@ async def _upcoming_tasks_note(session: AsyncSession, workspace: Workspace) -> s
     return "Ближайшие задачи/напоминания этого чата:\n" + "\n".join(lines)
 
 
-def build_instruction(tasks_note: str) -> str:
+def build_instruction(tasks_note: str, percent: int) -> str:
+    head = _INSTRUCTION_HEAD.format(level=level_hint(percent))
     if tasks_note:
-        return f"{_INSTRUCTION_HEAD}\n\n{tasks_note}"
-    return _INSTRUCTION_HEAD
+        return f"{head}\n\n{tasks_note}"
+    return head
 
 
 def is_silence(text: str) -> bool:
@@ -174,6 +206,8 @@ async def should_run(
     settings = get_settings()
     if not enabled_for(workspace):
         return False
+    if initiative_percent(workspace) <= 0:
+        return False  # субъектность выключена — не пишем сами (и не жжём LLM)
     if not due_to_reflect(workspace, now_utc):
         return False
     now_local = now_utc.astimezone(ZoneInfo(settings.timezone))

@@ -11,6 +11,7 @@ from app.bot.handlers import (
     digest,
     heartbeat,
     history_edit,
+    initiative,
     mcp,
     memory,
     model,
@@ -82,6 +83,7 @@ def create_dispatcher(session_factory: async_sessionmaker) -> Dispatcher:
     dp.include_router(scripts.router)
     dp.include_router(proactive.router)
     dp.include_router(heartbeat.router)
+    dp.include_router(initiative.router)
     dp.include_router(digest.router)
     dp.include_router(history_edit.router)
     dp.include_router(search.router)

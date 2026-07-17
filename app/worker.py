@@ -1,4 +1,5 @@
 import logging
+import random
 from datetime import datetime, timezone
 
 from aiogram import Bot
@@ -313,7 +314,7 @@ async def compress_histories(ctx: dict) -> None:
 
 
 async def _run_one_heartbeat(
-    bot: Bot, session: AsyncSession, workspace: Workspace, now: datetime
+    bot: Bot, session: AsyncSession, workspace: Workspace, now: datetime, percent: int
 ) -> None:
     """Один хартбит-ход для воркспейса: рефлексия → отправка (или молчание).
 
@@ -323,7 +324,7 @@ async def _run_one_heartbeat(
     if user is None:
         return
     tasks_note = await heartbeat._upcoming_tasks_note(session, workspace)
-    instruction = heartbeat.build_instruction(tasks_note)
+    instruction = heartbeat.build_instruction(tasks_note, percent)
 
     outcome = await llm_chat.generate_reply(
         session, workspace, user,
@@ -359,7 +360,18 @@ async def run_heartbeats(ctx: dict) -> None:
                 try:
                     if not await heartbeat.should_run(session, workspace, now):
                         continue
-                    await _run_one_heartbeat(bot, session, workspace, now)
+                    # «Тик» состоялся: пульс задаёт частоту размышлений, а
+                    # initiative % — вероятность, что этот тик станет сообщением.
+                    # Бросок ДО LLM: при низкой инициативе почти всегда экономим
+                    # ход, но heartbeat_last всё равно двигаем (ритм = интервал).
+                    percent = heartbeat.initiative_percent(workspace)
+                    if random.random() * 100 < percent:
+                        await _run_one_heartbeat(bot, session, workspace, now, percent)
+                    else:
+                        workspace.settings = {
+                            **(workspace.settings or {}),
+                            "heartbeat_last": now.isoformat(),
+                        }
                     await session.commit()
                 except LlmError as exc:
                     logger.warning("Хартбит ws %s: LLM упал: %s", workspace.id, exc)

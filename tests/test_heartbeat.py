@@ -88,14 +88,45 @@ def test_due_old_reflection_passes():
 
 def test_build_instruction_includes_tasks():
     note = "Ближайшие задачи/напоминания этого чата:\n- 18.07 10:00: врач"
-    text = heartbeat.build_instruction(note)
+    text = heartbeat.build_instruction(note, 30)
     assert "МОЛЧУ" in text  # сентинел объяснён модели
     assert "врач" in text
 
 
 def test_build_instruction_without_tasks():
-    text = heartbeat.build_instruction("")
+    text = heartbeat.build_instruction("", 30)
     assert "МОЛЧУ" in text
+
+
+def test_build_instruction_reflects_level():
+    low = heartbeat.build_instruction("", 10)
+    high = heartbeat.build_instruction("", 90)
+    assert "НИЗКАЯ" in low and "ВЫСОКАЯ" not in low
+    assert "ВЫСОКАЯ" in high
+
+
+# --- initiative % -------------------------------------------------------------
+
+
+def test_initiative_default():
+    assert heartbeat.initiative_percent(_ws()) == 30  # дефолт из конфига
+
+
+def test_initiative_override_and_clamp():
+    assert heartbeat.initiative_percent(_ws(initiative=80)) == 80
+    assert heartbeat.initiative_percent(_ws(initiative=0)) == 0
+    assert heartbeat.initiative_percent(_ws(initiative=250)) == 100
+    assert heartbeat.initiative_percent(_ws(initiative=-5)) == 0
+
+
+@pytest.mark.parametrize(
+    "percent,marker",
+    [(0, "НИЗКАЯ"), (20, "НИЗКАЯ"), (33, "НИЗКАЯ"),
+     (34, "СРЕДНЯЯ"), (50, "СРЕДНЯЯ"), (66, "СРЕДНЯЯ"),
+     (67, "ВЫСОКАЯ"), (100, "ВЫСОКАЯ")],
+)
+def test_level_hint_buckets(percent, marker):
+    assert marker in heartbeat.level_hint(percent)
 
 
 # --- should_run: гейты (стабим БД-хелперы) ------------------------------------
@@ -124,6 +155,11 @@ async def test_should_run_passes(stub_db):
 
 async def test_should_run_blocked_when_disabled(stub_db):
     assert await heartbeat.should_run(None, _ws(heartbeat=False), _DAYTIME) is False
+
+
+async def test_should_run_blocked_when_initiative_zero(stub_db):
+    # Пульс включён, но субъектность 0 — сам не пишем и LLM не жжём
+    assert await heartbeat.should_run(None, _ws(initiative=0), _DAYTIME) is False
 
 
 async def test_should_run_blocked_not_due(stub_db):
@@ -157,3 +193,35 @@ async def test_should_run_blocked_over_budget(monkeypatch, stub_db):
 
     monkeypatch.setattr(heartbeat.budget_service, "check", _over)
     assert await heartbeat.should_run(None, _ws(), _DAYTIME) is False
+
+
+# --- Инструмент set_initiative (бот сам крутит субъектность) -------------------
+
+
+async def test_tool_set_initiative_off(monkeypatch):
+    from app.tools import initiative as initiative_tool
+
+    async def _noop_audit(*a, **k):
+        return None
+
+    monkeypatch.setattr(initiative_tool.audit, "log", _noop_audit)
+    ws = _ws(initiative=80)
+    ctx = SimpleNamespace(workspace=ws, session=None, user=SimpleNamespace(id=1))
+
+    out = await initiative_tool._set_initiative(ctx, 0)
+    assert ws.settings["initiative"] == 0
+    assert "не буду" in out or "0%" in out
+
+
+async def test_tool_set_initiative_clamps(monkeypatch):
+    from app.tools import initiative as initiative_tool
+
+    async def _noop_audit(*a, **k):
+        return None
+
+    monkeypatch.setattr(initiative_tool.audit, "log", _noop_audit)
+    ws = _ws()
+    ctx = SimpleNamespace(workspace=ws, session=None, user=SimpleNamespace(id=1))
+
+    await initiative_tool._set_initiative(ctx, 250)
+    assert ws.settings["initiative"] == 100

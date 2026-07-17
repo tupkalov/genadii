@@ -36,14 +36,16 @@ async def cmd_heartbeat(
 
     if not arg:
         state = "включён ✅" if enabled else "выключен 🔕"
+        initiative = heartbeat.initiative_percent(workspace)
         text = (
-            f"💓 <b>Хартбит этого чата: {state}</b>\n"
-            f"Раз в ~{every // 60} ч я сам смотрю, не написать ли первым "
-            "(напомнить о деле, вернуться к теме, спросить как дела) — но только "
-            "если правда есть повод, и не по ночам.\n\n"
-            "Выключить: <code>/heartbeat off</code>\n"
+            f"💓 <b>Хартбит (пульс) этого чата: {state}</b>\n"
+            f"Раз в ~{every // 60} ч я «просыпаюсь» и смотрю на чат. Пишу ли при "
+            "этом первым и как часто — отдельная настройка "
+            f"<code>/initiative</code> (сейчас {initiative}%). Пульс — это только "
+            "как часто я думаю; ночью молчу в любом случае.\n\n"
+            "Выключить пульс: <code>/heartbeat off</code>\n"
             "Включить: <code>/heartbeat on</code>\n"
-            "Как часто: <code>/heartbeat 240</code> (минуты между проверками)"
+            "Как часто думать: <code>/heartbeat 240</code> (минуты)"
         )
         sent = await message.answer(text)
         await messages.save_assistant(session, workspace, text, tg_message_id=sent.message_id)

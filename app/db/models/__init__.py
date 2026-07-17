@@ -1,3 +1,4 @@
+from app.db.models.app_setting import AppSetting
 from app.db.models.audit import AuditLog
 from app.db.models.mcp_server import McpServer
 from app.db.models.memory import MemoryEntry
@@ -12,6 +13,7 @@ from app.db.models.webhook import Webhook
 from app.db.models.workspace import Workspace, WorkspaceMember, WorkspaceType
 
 __all__ = [
+    "AppSetting",
     "AuditLog",
     "LlmUsage",
     "McpServer",

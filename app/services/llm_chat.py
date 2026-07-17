@@ -17,7 +17,7 @@ from app.db.models import (
 )
 from app.llm import client
 from app.llm.prompts import build_system_prompt
-from app.services import guard, mcp, memory, skills as skills_service
+from app.services import app_settings, guard, mcp, memory, skills as skills_service
 from app.tools import permissions
 from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
@@ -51,17 +51,24 @@ class ChatOutcome:
     attachments: list[bytes]
 
 
-def pick_model(workspace: Workspace, multimodal: bool = False) -> str:
-    """Дешёвый дефолт из конфига, override — в настройках workspace.
+def pick_model(
+    workspace: Workspace, multimodal: bool = False, default_model: str | None = None
+) -> str:
+    """Дефолт (глобальный, БД или конфиг), override — в настройках workspace.
 
-    Для мультимодальных ходов (фото в сообщении) — vision-модель:
+    default_model — эффективный глобальный дефолт (из app_settings.default_model);
+    None → берём из конфига/.env. Для мультимодальных ходов (фото) — vision-модель:
     дефолтная модель картинки не понимает.
     """
     settings = get_settings()
     ws_settings = workspace.settings or {}
     if multimodal:
         return ws_settings.get("vision_model") or settings.vision_model
-    return ws_settings.get("model_override") or settings.default_model
+    return (
+        ws_settings.get("model_override")
+        or default_model
+        or settings.default_model
+    )
 
 
 async def _load_history(
@@ -161,7 +168,10 @@ async def generate_reply(
     tools = skills_service.filter_tools(tools, allowed_tools)
     messages = await _build_messages(session, workspace, extra_user_message, tools, user)
     is_multimodal = isinstance(extra_user_message, list)
-    model = force_model or pick_model(workspace, multimodal=is_multimodal)
+    global_default = await app_settings.default_model(session)
+    model = force_model or pick_model(
+        workspace, multimodal=is_multimodal, default_model=global_default
+    )
     # Эскалация на smart-модель при зацикливании: не трогаем мультимодальные
     # ходы (там нужна именно vision-модель), явный оверрайд пользователя
     # и разовый force_model.

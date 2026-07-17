@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # LLM (Milestone 3)
     openrouter_api_key: str = ""
-    default_model: str = "google/gemini-2.5-flash-lite"
+    default_model: str = "deepseek/deepseek-v4-flash"
     # Эскалация при зацикливании на инструментах (Ит.10) — reasoning-версия
     # того же класса, не топовый флагман. ID именно OpenRouter'а
     # («deepseek-reasoner» — это имя из нативного API DeepSeek, тут его нет)

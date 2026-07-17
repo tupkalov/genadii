@@ -16,8 +16,10 @@ def _msg(**kwargs):
     return SimpleNamespace(**defaults)
 
 
-def _user(first_name=None, username=None, id=1):
-    return SimpleNamespace(first_name=first_name, username=username, id=id)
+def _user(first_name=None, username=None, id=1, is_bot=False):
+    return SimpleNamespace(
+        first_name=first_name, username=username, id=id, is_bot=is_bot
+    )
 
 
 def test_reply_target_text_is_included():
@@ -61,6 +63,34 @@ def test_long_reply_text_is_truncated():
     decorated = _decorate(message, message.text)
     assert "х" * 400 + "…" in decorated
     assert "х" * 401 not in decorated
+
+
+def test_reply_to_bot_own_message_is_directive():
+    # Реплай на сообщение самого бота — директивный якорь темы, а не пассивная
+    # метка. Реальный сбой: «Ещё раз давай» в ответ на ресёрч → офтоп из свежей
+    # истории. Модель должна держаться процитированной темы.
+    reply = _msg(text="Окей, поищу варианты доставки продуктов в Подгорице…")
+    reply.from_user = _user(first_name="Умный Геннадий", is_bot=True)
+    message = _msg(text="Ещё раз давай", reply_to_message=reply)
+
+    decorated = _decorate(message, message.text)
+    assert "на ТВОЁ прошлое сообщение" in decorated
+    assert "доставки продуктов в Подгорице" in decorated
+    assert "не на то, что писали в чате перед этим" in decorated
+    assert decorated.endswith("Ещё раз давай")
+    # Пассивная формулировка для чужих сообщений тут не используется
+    assert "[в ответ на сообщение" not in decorated
+
+
+def test_reply_to_human_stays_passive():
+    # Реплай на человека — прежняя нейтральная метка (бот лишь наблюдатель)
+    reply = _msg(text="в пятницу едем на дачу")
+    reply.from_user = _user(first_name="Ари", is_bot=False)
+    message = _msg(text="@bot а во сколько?", reply_to_message=reply)
+
+    decorated = _decorate(message, message.text)
+    assert "[в ответ на сообщение Ари:" in decorated
+    assert "ТВОЁ прошлое сообщение" not in decorated
 
 
 def test_no_reply_no_label():

@@ -59,9 +59,24 @@ def _decorate(tg_message: TgMessage, content: str) -> str:
             snippet = quoted[:REPLY_SNIPPET_LIMIT] + (
                 "…" if len(quoted) > REPLY_SNIPPET_LIMIT else ""
             )
-            content = (
-                f"[в ответ на сообщение {_reply_author(reply)}: «{snippet}»]\n{content}"
-            )
+            # Реплай на СОБСТВЕННОЕ сообщение бота — сильный сигнал: пользователь
+            # продолжает/переспрашивает именно ту тему, даже если в чате только
+            # что болтали про другое. Слабая модель иначе цепляется за недавнее
+            # (реальный сбой: «Ещё раз давай» в ответ на ресёрч доставки → ответ
+            # про постороннего человека из свежей истории). Директивная метка
+            # держит якорь крепче пассивного «[в ответ на …]».
+            reply_from = reply.from_user
+            if reply_from is not None and reply_from.is_bot:
+                content = (
+                    "[Пользователь отвечает на ТВОЁ прошлое сообщение (ниже) — "
+                    "он продолжает или переспрашивает именно эту тему. "
+                    "Ориентируйся на неё, а не на то, что писали в чате перед этим.\n"
+                    f"Твоё сообщение: «{snippet}»]\n{content}"
+                )
+            else:
+                content = (
+                    f"[в ответ на сообщение {_reply_author(reply)}: «{snippet}»]\n{content}"
+                )
     elif quote and quote.text:
         content = f"[обращает внимание на цитату: «{quote.text}»]\n{content}"
     label = forward_label(tg_message.forward_origin)

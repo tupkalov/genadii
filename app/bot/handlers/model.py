@@ -12,6 +12,31 @@ from app.services.llm_chat import pick_model
 
 router = Router(name="model")
 
+# Подборка проверенных моделей OpenRouter под этого бота. Можно задать ЛЮБУЮ
+# (аргумент /model принимает любой vendor/model-name) — это просто ориентир.
+# Порядок: от дешёвой/слабой к умной/дорогой. Цены — за 1M токенов
+# (вход/выход), OpenRouter, актуальны на 2026-07; могут меняться.
+RECOMMENDED_MODELS = [
+    ("google/gemini-2.5-flash-lite", "дёшево ($0.10/$0.40), но слабо в инструментах — врёт и откладывает"),
+    ("google/gemini-2.5-flash", "⭐ умнее, надёжно вызывает инструменты ($0.30/$2.50)"),
+    ("deepseek/deepseek-chat", "дёшево, приличный агент, но помедленнее"),
+    ("google/gemini-2.5-pro", "заметно умнее, дороже — для сложных задач"),
+    ("anthropic/claude-haiku-4.5", "быстрая и умная, средняя цена"),
+]
+
+
+def _models_list_text(default_model: str) -> str:
+    lines = ["<b>Модели-ориентиры</b> (можно указать любую с OpenRouter):", ""]
+    for model_id, note in RECOMMENDED_MODELS:
+        mark = " — <i>текущий дефолт</i>" if model_id == default_model else ""
+        lines.append(f"• <code>{html.escape(model_id)}</code>{mark}\n  {note}")
+    lines += [
+        "",
+        "Сменить (только админ): <code>/model google/gemini-2.5-flash</code>",
+        "Вернуть дефолт: <code>/model reset</code>",
+    ]
+    return "\n".join(lines)
+
 
 @router.message(Command("model"))
 async def cmd_model(
@@ -23,13 +48,17 @@ async def cmd_model(
 ) -> None:
     settings = get_settings()
 
-    if not command.args:
+    if command.args and command.args.strip().lower() == "list":
+        # Список — безобидная справка, доступен всем участникам
+        text = _models_list_text(settings.default_model)
+    elif not command.args:
         current = pick_model(workspace)
         override = (workspace.settings or {}).get("model_override")
         text = (
             f"Модель этого чата: <code>{html.escape(current)}</code>"
             + ("" if override else " (дефолт)")
             + f"\nДефолт: <code>{settings.default_model}</code>\n\n"
+            "Список моделей: <code>/model list</code>\n"
             "Сменить (только админ): <code>/model vendor/model-name</code>\n"
             "Вернуть дефолт: <code>/model reset</code>"
         )

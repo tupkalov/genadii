@@ -194,6 +194,8 @@ async def generate_reply(
 
     usages: list[client.LlmResult] = []
     had_tool_failure = False  # упавший инструмент → чинит сразу smart-модель
+    used_any_tool = False  # был ли хоть один вызов инструмента за ход
+    deferral_nudged = False  # анти-«сделаю потом» наджем выдаём один раз
     for iteration in range(MAX_TOOL_ITERATIONS):
         # На последней итерации убираем инструменты: модель обязана дать финальный
         # ответ из уже собранного, а не звать очередной tool (иначе — фолбэк).
@@ -252,6 +254,22 @@ async def generate_reply(
                     attachments=ctx.attachments,
                 )
             text = result.content
+            # Guard: «сделаю потом» без единого инструмента — пустое обещание
+            # (фоновой работы у бота нет). Даём ещё один tool-раунд с жёстким
+            # наджем, чтобы модель выполнила запрос прямо сейчас. Один раз и
+            # только если инструменты вообще были доступны и ещё есть раунды.
+            if (
+                not last
+                and not used_any_tool
+                and not deferral_nudged
+                and tool_schemas
+                and guard.is_deferral(text)
+            ):
+                deferral_nudged = True
+                logger.info("Guard: ответ обещает работу «потом» без инструментов, перегенерирую")
+                messages.append(result.raw_message)
+                messages.append({"role": "user", "content": guard.NO_DEFER_NUDGE})
+                continue
             # Guard: длинный ответ «не в тему» (модель ушла в чужой контекст) —
             # даём один шанс переписать строго по последнему сообщению. Проверка
             # fail-open: сбой/короткий ответ/мультимодалка нормальные реплики не трогают.
@@ -291,6 +309,7 @@ async def generate_reply(
             round_delta(f"⚙️ {tool_names}…")
 
         messages.append(result.raw_message)
+        used_any_tool = True
         tools_map = {t.name: t for t in tools}
         for tool_call in result.tool_calls:
             output = await execute_tool_call(ctx, tool_call, tools_map=tools_map)

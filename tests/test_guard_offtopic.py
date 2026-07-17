@@ -77,3 +77,45 @@ async def test_check_failure_is_fail_open(monkeypatch):
     on_topic, usage = await guard.is_on_topic("вопрос", reply, "m")
     # сбой проверки не должен блокировать нормальный ответ
     assert on_topic is True and usage is None
+
+
+# --- Детектор отложенной работы (is_deferral) ---------------------------------
+
+
+def test_deferral_detects_real_incident():
+    # Дословно реальный сбой (msg 2622): план на будущее без единого web_search.
+    reply = (
+        "Окей, давайте посмотрим, какие варианты доставки продуктов есть в "
+        "Подгорице. Я поищу информацию о местных супермаркетах и сервисах "
+        "доставки. Пожалуйста, дай мне немного времени, чтобы провести поиск."
+    )
+    assert guard.is_deferral(reply) is True
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Сейчас поищу, подожди немного",
+        "Мне нужно немного времени, чтобы всё собрать",
+        "Работаю над этим, скоро вернусь с результатом",
+        "Дай мне пару минут",
+        "Как только соберу список — сразу пришлю",
+        "Это займёт немного времени",
+    ],
+)
+def test_deferral_matches_stall_phrases(reply):
+    assert guard.is_deferral(reply) is True
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "В Подгорице есть Glovo и Wolt — оба возят продукты, вот ссылки.",
+        "Готово, добавил задачу в список.",
+        "Не нашёл сервисов доставки конкретно по этому адресу.",
+        "",
+        "ок 👍",
+    ],
+)
+def test_deferral_ignores_real_answers(reply):
+    assert guard.is_deferral(reply) is False

@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     # сообщения (ловит не-sequitur слабой модели). Одна дешёвая доп-проверка.
     guard_offtopic: bool = True
 
+    # Хартбит: бот сам по таймеру просыпается на чат и решает, не написать ли
+    # первым (напоминания, оборванные темы, факты из памяти, изредка чек-ин).
+    # Сильный уклон в молчание — «сбалансированно» ≈ пара сообщений в день при
+    # реальном поводе. Включено по умолчанию, отключается per-chat (/heartbeat).
+    heartbeat_default_on: bool = True
+    heartbeat_interval_minutes: int = 180  # как часто РАЗМЫШЛЯТЬ (не «говорить»)
+    heartbeat_min_silence_minutes: int = 45  # не встревать, пока чат «живой»
+    heartbeat_quiet_start_hour: int = 22  # тихие часы (по settings.timezone): не пишем
+    heartbeat_quiet_end_hour: int = 9
+
     # Мультимодальность (Итерация 2): дефолт не умеет картинки/аудио,
     # для них подключаются отдельные модели
     vision_model: str = "google/gemini-2.5-flash"

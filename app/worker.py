@@ -14,7 +14,7 @@ from app.db.models import ScheduledTask, User, Workspace
 from app.db.session import session_factory
 from app.llm import http as llm_http
 from app.llm.client import LlmError
-from app.services import alerts, budget, llm_chat, messages, reminders, skills
+from app.services import alerts, budget, heartbeat, llm_chat, messages, reminders, skills
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gennady.worker")
@@ -312,6 +312,69 @@ async def compress_histories(ctx: dict) -> None:
         )
 
 
+async def _run_one_heartbeat(
+    bot: Bot, session: AsyncSession, workspace: Workspace, now: datetime
+) -> None:
+    """Один хартбит-ход для воркспейса: рефлексия → отправка (или молчание).
+
+    heartbeat_last обновляем ВСЕГДА (и когда смолчали), чтобы разнести
+    LLM-ходы во времени; иначе следующий крон снова дёрнет модель."""
+    user = await heartbeat._pick_user(session, workspace)
+    if user is None:
+        return
+    tasks_note = await heartbeat._upcoming_tasks_note(session, workspace)
+    instruction = heartbeat.build_instruction(tasks_note)
+
+    outcome = await llm_chat.generate_reply(
+        session, workspace, user,
+        extra_user_message=instruction,
+        bot=bot, chat_id=workspace.tg_chat_id,
+        guard_offtopic=False,  # хартбит ни на что не «отвечает по теме»
+    )
+    workspace.settings = {**(workspace.settings or {}), "heartbeat_last": now.isoformat()}
+
+    text = outcome.text.strip()
+    if heartbeat.is_silence(text):
+        logger.info("Хартбит ws %s: молчу", workspace.id)
+        return
+
+    sent = await send_rendered(bot, workspace.tg_chat_id, text)
+    saved = await messages.save_assistant(
+        session, workspace, text, tg_message_id=sent.message_id
+    )
+    await llm_chat.log_usages(
+        session, workspace, outcome.usages, message_id=saved.id, user_id=user.id
+    )
+    logger.info("Хартбит ws %s: написал первым", workspace.id)
+
+
+async def run_heartbeats(ctx: dict) -> None:
+    """Периодически будим бота на тихие чаты — сам решает, писать ли первым."""
+    bot: Bot = ctx["bot"]
+    now = datetime.now(timezone.utc)
+    try:
+        async with session_factory() as session:
+            workspaces = (await session.scalars(select(Workspace))).all()
+            for workspace in workspaces:
+                try:
+                    if not await heartbeat.should_run(session, workspace, now):
+                        continue
+                    await _run_one_heartbeat(bot, session, workspace, now)
+                    await session.commit()
+                except LlmError as exc:
+                    logger.warning("Хартбит ws %s: LLM упал: %s", workspace.id, exc)
+                    await alerts.record_llm_failure(bot)
+                    await session.rollback()
+                except Exception:
+                    logger.exception("Хартбит ws %s упал", workspace.id)
+                    await session.rollback()
+    except Exception as exc:
+        logger.exception("Cron run_heartbeats упал целиком")
+        await alerts.notify_admins(
+            ctx["bot"], f"⚠️ Cron run_heartbeats упал: {exc}", kind="cron:run_heartbeats"
+        )
+
+
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = startup
@@ -324,4 +387,7 @@ class WorkerSettings:
         cron(reindex_memory, minute={0, 15, 30, 45}, run_at_startup=True),
         cron(compress_histories, minute={5}, run_at_startup=True),
         cron(send_digests, second={0}),  # ежеминутная проверка времени дайджестов
+        # Хартбит: проверяем гейты каждые ~15 мин, LLM-ход — только для «дозревших»
+        # чатов (интервал размышления ≥ heartbeat_interval_minutes)
+        cron(run_heartbeats, minute={8, 23, 38, 53}),
     ]

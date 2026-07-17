@@ -73,6 +73,18 @@ def level_hint(percent: int) -> str:
     )
 
 
+def chat_timezone(workspace: Workspace) -> ZoneInfo:
+    """Пояс этого чата: settings['timezone'] (IANA) или глобальный дефолт.
+    Кривое значение — молча откатываемся на дефолт, чтобы не падать в кроне."""
+    raw = (workspace.settings or {}).get("timezone")
+    if raw:
+        try:
+            return ZoneInfo(raw)
+        except Exception:  # noqa: BLE001 — неизвестный/битый пояс
+            pass
+    return ZoneInfo(get_settings().timezone)
+
+
 def is_quiet_hours(now_local: datetime, start_hour: int, end_hour: int) -> bool:
     """Тихие часы по локальному времени. Интервал может пересекать полночь
     (напр. 22→9): тогда «тихо» — это hour>=start ИЛИ hour<end."""
@@ -171,7 +183,7 @@ async def _upcoming_tasks_note(session: AsyncSession, workspace: Workspace) -> s
     ).scalars().all()
     if not rows:
         return ""
-    tz = ZoneInfo(get_settings().timezone)
+    tz = chat_timezone(workspace)
     lines = []
     for task in rows:
         when = task.run_at.astimezone(tz).strftime("%d.%m %H:%M")
@@ -210,7 +222,7 @@ async def should_run(
         return False  # субъектность выключена — не пишем сами (и не жжём LLM)
     if not due_to_reflect(workspace, now_utc):
         return False
-    now_local = now_utc.astimezone(ZoneInfo(settings.timezone))
+    now_local = now_utc.astimezone(chat_timezone(workspace))
     if is_quiet_hours(
         now_local, settings.heartbeat_quiet_start_hour, settings.heartbeat_quiet_end_hour
     ):

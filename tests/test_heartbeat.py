@@ -195,6 +195,69 @@ async def test_should_run_blocked_over_budget(monkeypatch, stub_db):
     assert await heartbeat.should_run(None, _ws(), _DAYTIME) is False
 
 
+# --- Часовой пояс чата (тихие часы по времени юзера) --------------------------
+
+
+def test_chat_timezone_default():
+    assert heartbeat.chat_timezone(_ws()).key == "Europe/Moscow"
+
+
+def test_chat_timezone_override():
+    assert heartbeat.chat_timezone(_ws(timezone="Europe/Podgorica")).key == "Europe/Podgorica"
+
+
+def test_chat_timezone_invalid_falls_back():
+    # Кривой пояс не должен ронять крон — откат на дефолт
+    assert heartbeat.chat_timezone(_ws(timezone="Nowhere/Nope")).key == "Europe/Moscow"
+
+
+async def test_quiet_hours_use_chat_timezone(stub_db):
+    # 12:00 UTC = 15:00 MSK (день), но 22:00 во Владивостоке → для чата с этим
+    # поясом должно быть тихо, хотя по серверной Москве — рабочее время
+    ws_vld = _ws(timezone="Asia/Vladivostok")
+    assert await heartbeat.should_run(None, ws_vld, _DAYTIME) is False
+
+
+async def test_daytime_in_chat_timezone_passes(stub_db):
+    # 20:00 UTC = 23:00 MSK (у сервера ночь/тихо), но 16:00 в Нью-Йорке → день,
+    # для чата с этим поясом хартбит проходит
+    ws_ny = _ws(timezone="America/New_York")
+    assert await heartbeat.should_run(None, ws_ny, _NIGHT) is True
+
+
+# --- Инструмент set_timezone --------------------------------------------------
+
+
+async def test_tool_set_timezone_valid(monkeypatch):
+    from app.tools import timezone as tz_tool
+
+    async def _noop_audit(*a, **k):
+        return None
+
+    monkeypatch.setattr(tz_tool.audit, "log", _noop_audit)
+    ws = _ws()
+    ctx = SimpleNamespace(workspace=ws, session=None, user=SimpleNamespace(id=1))
+
+    out = await tz_tool._set_timezone(ctx, "Europe/Podgorica")
+    assert ws.settings["timezone"] == "Europe/Podgorica"
+    assert "Podgorica" in out
+
+
+async def test_tool_set_timezone_invalid(monkeypatch):
+    from app.tools import timezone as tz_tool
+
+    async def _noop_audit(*a, **k):
+        return None
+
+    monkeypatch.setattr(tz_tool.audit, "log", _noop_audit)
+    ws = _ws(timezone="Europe/Moscow")
+    ctx = SimpleNamespace(workspace=ws, session=None, user=SimpleNamespace(id=1))
+
+    out = await tz_tool._set_timezone(ctx, "Notacity/Nope")
+    assert "Ошибка" in out
+    assert ws.settings["timezone"] == "Europe/Moscow"  # не перезаписали
+
+
 # --- Инструмент set_initiative (бот сам крутит субъектность) -------------------
 
 

@@ -37,12 +37,16 @@ async def cmd_heartbeat(
     if not arg:
         state = "включён ✅" if enabled else "выключен 🔕"
         initiative = heartbeat.initiative_percent(workspace)
+        tz = heartbeat.chat_timezone(workspace)
+        qs = settings.heartbeat_quiet_start_hour
+        qe = settings.heartbeat_quiet_end_hour
         text = (
             f"💓 <b>Хартбит (пульс) этого чата: {state}</b>\n"
             f"Раз в ~{every // 60} ч я «просыпаюсь» и смотрю на чат. Пишу ли при "
             "этом первым и как часто — отдельная настройка "
-            f"<code>/initiative</code> (сейчас {initiative}%). Пульс — это только "
-            "как часто я думаю; ночью молчу в любом случае.\n\n"
+            f"<code>/initiative</code> (сейчас {initiative}%).\n"
+            f"Ночью молчу: {qs:02d}:00–{qe:02d}:00 по поясу <code>{tz.key}</code> "
+            "(скажи мне, где ты, — подстрою пояс).\n\n"
             "Выключить пульс: <code>/heartbeat off</code>\n"
             "Включить: <code>/heartbeat on</code>\n"
             "Как часто думать: <code>/heartbeat 240</code> (минуты)"

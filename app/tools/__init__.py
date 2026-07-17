@@ -9,6 +9,7 @@ import app.tools.reminders  # noqa: F401
 import app.tools.sandbox  # noqa: F401
 import app.tools.scripts  # noqa: F401
 import app.tools.skills_tools  # noqa: F401
+import app.tools.timezone  # noqa: F401
 import app.tools.web  # noqa: F401
 from app.tools.registry import TOOLS, Tool, ToolContext, register
 

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # LLM (Milestone 3)
     openrouter_api_key: str = ""
-    default_model: str = "deepseek/deepseek-chat"
+    default_model: str = "google/gemini-2.5-flash-lite"
     # Эскалация при зацикливании на инструментах (Ит.10) — reasoning-версия
     # того же класса, не топовый флагман. ID именно OpenRouter'а
     # («deepseek-reasoner» — это имя из нативного API DeepSeek, тут его нет)
@@ -33,6 +33,10 @@ class Settings(BaseSettings):
 
     stream_responses: bool = True  # печатать ответ постепенно (правка сообщения)
     stream_edit_interval: float = 1.7  # как часто править сообщение при стриминге, сек
+
+    # Guard: перед отправкой длинного ответа проверять, что он по теме последнего
+    # сообщения (ловит не-sequitur слабой модели). Одна дешёвая доп-проверка.
+    guard_offtopic: bool = True
 
     # Мультимодальность (Итерация 2): дефолт не умеет картинки/аудио,
     # для них подключаются отдельные модели

@@ -17,7 +17,7 @@ from app.db.models import (
 )
 from app.llm import client
 from app.llm.prompts import build_system_prompt
-from app.services import mcp, memory, skills as skills_service
+from app.services import guard, mcp, memory, skills as skills_service
 from app.tools import permissions
 from app.tools.executor import execute_tool_call
 from app.tools.registry import ToolContext
@@ -144,6 +144,7 @@ async def generate_reply(
     on_delta=None,
     force_model: str | None = None,
     allowed_tools: list[str] | None = None,
+    guard_offtopic: bool = True,
 ) -> ChatOutcome:
     """Контекст + tool-calling цикл. Входящее сообщение уже в истории.
 
@@ -152,6 +153,8 @@ async def generate_reply(
     bot/chat_id/target_message_id пробрасываются в tools (реакции).
     force_model — разовый оверрайд модели (напр. /retry smart).
     allowed_tools — allowlist имён/масок для этого хода (скиллы): None — все.
+    guard_offtopic — проверять финальный ответ на «не в тему» (см. services.guard);
+    выключается для проактивных реплик (им не на что «отвечать по существу»).
     """
     tools = await permissions.enabled_tools(session, workspace)
     tools = tools + await mcp.workspace_mcp_tools(session, workspace)
@@ -248,8 +251,33 @@ async def generate_reply(
                     usages=usages,
                     attachments=ctx.attachments,
                 )
+            text = result.content
+            # Guard: длинный ответ «не в тему» (модель ушла в чужой контекст) —
+            # даём один шанс переписать строго по последнему сообщению. Проверка
+            # fail-open: сбой/короткий ответ/мультимодалка нормальные реплики не трогают.
+            if (
+                guard_offtopic
+                and get_settings().guard_offtopic
+                and not is_multimodal
+                and not ctx.attachments
+            ):
+                user_text = guard.last_user_text(messages)
+                on_topic, check_usage = await guard.is_on_topic(
+                    user_text, text, model
+                )
+                if check_usage is not None:
+                    usages.append(check_usage)
+                if not on_topic:
+                    messages.append(result.raw_message)
+                    messages.append({"role": "user", "content": guard.REWRITE_NUDGE})
+                    retry = await client.chat(messages, model)
+                    usages.append(retry)
+                    if retry.content.strip() and not _has_leaked_tool_syntax(
+                        retry.content
+                    ):
+                        text = retry.content
             return ChatOutcome(
-                text=result.content, usages=usages, attachments=ctx.attachments
+                text=text, usages=usages, attachments=ctx.attachments
             )
 
         # Раунд закончился вызовом инструментов: фиксируем его мысли в черновике
@@ -305,6 +333,7 @@ async def maybe_interject(
         session, workspace, user,
         extra_user_message=INTERJECT_INSTRUCTION,
         bot=bot, chat_id=chat_id,
+        guard_offtopic=False,  # проактивная реплика ни на что не «отвечает по теме»
     )
     text = outcome.text.strip()
     if not text or (len(text) < 12 and "SKIP" in text.upper()):

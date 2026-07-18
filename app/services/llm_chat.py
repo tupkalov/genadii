@@ -1,6 +1,7 @@
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,6 +90,27 @@ async def _load_history(
     return [(m, first_name or username) for m, first_name, username in reversed(rows)]
 
 
+# Ниже этого разрыва между сообщениями считаем разговор непрерывным — маркер
+# паузы не вставляем (обычная переписка, а не «вернулись через сутки»).
+_GAP_THRESHOLD_MINUTES = 180
+
+
+def gap_note(delta_seconds: float) -> str | None:
+    """Человеко-читаемый маркер паузы, если разрыв существенный, иначе None.
+
+    Модель видит историю без времени — из-за этого вчерашний тред выглядит
+    впритык к сегодняшнему ходу (реальный сбой: утренняя задача извинилась за
+    «навыдумывал» вчера как за только что). Маркер возвращает чувство времени."""
+    minutes = delta_seconds / 60
+    if minutes < _GAP_THRESHOLD_MINUTES:
+        return None
+    hours = minutes / 60
+    if hours >= 47:
+        days = round(hours / 24)
+        return f"[⏳ пауза в разговоре: прошло ~{days} дн]"
+    return f"[⏳ пауза в разговоре: прошло ~{round(hours)} ч]"
+
+
 async def _build_messages(
     session: AsyncSession,
     workspace: Workspace,
@@ -127,7 +149,15 @@ async def _build_messages(
         )
 
     messages: list[dict] = [{"role": "system", "content": system}]
+    prev_dt: datetime | None = None
     for msg, author in await _load_history(session, workspace, settings.history_limit):
+        # Маркер паузы между соседними сообщениями — чтобы модель чувствовала
+        # разрывы во времени и не считала старую тему актуальной
+        if prev_dt is not None and msg.created_at is not None:
+            note = gap_note((msg.created_at - prev_dt).total_seconds())
+            if note:
+                messages.append({"role": "user", "content": note})
+        prev_dt = msg.created_at
         if msg.role == MessageRole.assistant:
             messages.append({"role": "assistant", "content": msg.content})
         else:
@@ -136,6 +166,12 @@ async def _build_messages(
                 content = f"{author}: {content}"
             messages.append({"role": "user", "content": content})
     if extra_user_message:
+        # Пауза между последним сообщением истории и текущим ходом (важно для
+        # запланированных задач/хартбита, которые срабатывают спустя часы)
+        if prev_dt is not None:
+            note = gap_note((datetime.now(timezone.utc) - prev_dt).total_seconds())
+            if note:
+                messages.append({"role": "user", "content": note})
         messages.append({"role": "user", "content": extra_user_message})
     return messages
 

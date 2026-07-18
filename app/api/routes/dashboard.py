@@ -3,7 +3,7 @@ from html import escape
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.db.models import (
     AuditLog,
@@ -46,6 +46,9 @@ PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
  </div>
  <h2>Расходы по чатам (30 дней)</h2>
  <table><tr><th>Чат</th><th>Тип</th><th>Вызовов</th><th>Токены</th><th>Стоимость</th></tr>{usage_rows}</table>
+ <h2>Инициатива — хартбит (30 дней)</h2>
+ <p class="muted">Размышлений: <b>{hb_total}</b> — заговорил первым <b>{hb_spoke}</b>, смолчал {hb_silent}.</p>
+ <table><tr><th>Время</th><th>Чат</th><th>Итог</th><th>Инициатива</th></tr>{hb_rows}</table>
  <h2>Последние действия (audit)</h2>
  <table><tr><th>Время</th><th>Действие</th><th>Чат</th><th>Детали</th></tr>{audit_rows}</table>
 </main></body></html>"""
@@ -86,9 +89,40 @@ async def dashboard() -> str:
             )
         ).all()
 
+        # Инициатива: сводка размышлений хартбита и последние события
+        hb_total, hb_spoke = (
+            await session.execute(
+                select(
+                    func.count(AuditLog.id),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (AuditLog.payload["spoke"].astext == "true", 1),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                ).where(
+                    AuditLog.action == "heartbeat", AuditLog.created_at >= since
+                )
+            )
+        ).one()
+        hb_events = (
+            await session.execute(
+                select(AuditLog)
+                .where(AuditLog.action == "heartbeat")
+                .order_by(AuditLog.id.desc())
+                .limit(15)
+            )
+        ).scalars().all()
+
         audit = (
             await session.execute(
-                select(AuditLog).order_by(AuditLog.id.desc()).limit(20)
+                select(AuditLog)
+                .where(AuditLog.action != "heartbeat")  # хартбит — в своей секции
+                .order_by(AuditLog.id.desc())
+                .limit(20)
             )
         ).scalars().all()
 
@@ -105,7 +139,25 @@ async def dashboard() -> str:
         for a in audit
     ) or "<tr><td colspan=4 class='muted'>пока пусто</td></tr>"
 
+    def _hb_row(a: AuditLog) -> str:
+        payload = a.payload or {}
+        spoke = payload.get("spoke")
+        outcome = "🗣 написал" if spoke else "🤐 смолчал"
+        pct = payload.get("initiative")
+        pct_txt = f"{pct}%" if pct is not None else "—"
+        return (
+            f"<tr><td class='muted'>{a.created_at:%m-%d %H:%M}</td>"
+            f"<td class='muted'>{a.workspace_id or '—'}</td>"
+            f"<td>{outcome}</td><td class='muted'>{pct_txt}</td></tr>"
+        )
+
+    hb_rows = "".join(_hb_row(a) for a in hb_events) or (
+        "<tr><td colspan=4 class='muted'>пока не размышлял</td></tr>"
+    )
+
     return PAGE.format(
         workspaces=n_ws, messages=n_msg, facts=n_facts, tasks=n_tasks,
         cost30=float(cost30), usage_rows=usage_rows, audit_rows=audit_rows,
+        hb_total=hb_total, hb_spoke=hb_spoke, hb_silent=hb_total - hb_spoke,
+        hb_rows=hb_rows,
     )

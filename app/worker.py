@@ -266,13 +266,22 @@ async def send_digests(ctx: dict) -> None:
     today = now.date().isoformat()
 
     try:
+        ws_ids = await _all_workspace_ids(Workspace.type == WorkspaceType.personal)
+    except Exception as exc:
+        logger.exception("Cron send_digests: не смог получить список чатов")
+        await alerts.notify_admins(
+            bot, f"⚠️ Cron send_digests упал: {exc}", kind="cron:send_digests"
+        )
+        return
+
+    # Своя сессия на чат — сбой одного дайджеста не ломает остальные (см.
+    # compress_histories о greenlet-каскаде после rollback общей сессии).
+    for wsid in ws_ids:
         async with session_factory() as session:
-            personals = (
-                await session.scalars(
-                    select(Workspace).where(Workspace.type == WorkspaceType.personal)
-                )
-            ).all()
-            for ws in personals:
+            try:
+                ws = await session.get(Workspace, wsid)
+                if ws is None:
+                    continue
                 settings = ws.settings or {}
                 if (
                     settings.get("digest_time") != hhmm
@@ -284,21 +293,25 @@ async def send_digests(ctx: dict) -> None:
                 )
                 if user is None:
                     continue
-                try:
-                    text = await digest.build_for_user(session, user)
-                    if text:
-                        await send_rendered(bot, ws.tg_chat_id, text)
-                    ws.settings = {**settings, "digest_last_date": today}
-                    await session.commit()
-                    logger.info("Дайджест отправлен пользователю %s", ws.tg_chat_id)
-                except Exception:
-                    logger.exception("Дайджест для %s упал", ws.tg_chat_id)
-                    await session.rollback()
-    except Exception as exc:
-        logger.exception("Cron send_digests упал целиком")
-        await alerts.notify_admins(
-            bot, f"⚠️ Cron send_digests упал: {exc}", kind="cron:send_digests"
-        )
+                text = await digest.build_for_user(session, user)
+                if text:
+                    await send_rendered(bot, ws.tg_chat_id, text)
+                ws.settings = {**settings, "digest_last_date": today}
+                await session.commit()
+                logger.info("Дайджест отправлен пользователю %s", ws.tg_chat_id)
+            except Exception:
+                logger.exception("Дайджест для чата %s упал", wsid)
+                await session.rollback()
+
+
+async def _all_workspace_ids(where=None) -> list[int]:
+    """Список id воркспейсов отдельной короткой сессией — чтобы дальше по каждому
+    работать в СВОЕЙ сессии (сбой/rollback одного не экспайрит объекты других)."""
+    async with session_factory() as session:
+        stmt = select(Workspace.id)
+        if where is not None:
+            stmt = stmt.where(where)
+        return list((await session.scalars(stmt)).all())
 
 
 async def compress_histories(ctx: dict) -> None:
@@ -306,20 +319,28 @@ async def compress_histories(ctx: dict) -> None:
     from app.services import summaries
 
     try:
-        async with session_factory() as session:
-            workspaces = (await session.scalars(select(Workspace))).all()
-            for workspace in workspaces:
-                try:
-                    if await summaries.compress_workspace(session, workspace):
-                        await session.commit()
-                except Exception:
-                    logger.exception("Сжатие истории workspace %s упало", workspace.id)
-                    await session.rollback()
+        ws_ids = await _all_workspace_ids()
     except Exception as exc:
-        logger.exception("Cron compress_histories упал целиком")
+        logger.exception("Cron compress_histories: не смог получить список чатов")
         await alerts.notify_admins(
             ctx["bot"], f"⚠️ Cron compress_histories упал: {exc}", kind="cron:compress_histories"
         )
+        return
+
+    # Каждый чат — в своей сессии: rollback при сбое одного (напр. LLM вернул
+    # не-JSON) не экспайрит объекты остальных, иначе следующий доступ к
+    # workspace.settings ленился синхронно → greenlet_spawn error.
+    for wsid in ws_ids:
+        async with session_factory() as session:
+            try:
+                workspace = await session.get(Workspace, wsid)
+                if workspace is not None and await summaries.compress_workspace(
+                    session, workspace
+                ):
+                    await session.commit()
+            except Exception:
+                logger.exception("Сжатие истории workspace %s упало", wsid)
+                await session.rollback()
 
 
 async def _run_one_heartbeat(
@@ -377,37 +398,43 @@ async def run_heartbeats(ctx: dict) -> None:
     bot: Bot = ctx["bot"]
     now = datetime.now(timezone.utc)
     try:
-        async with session_factory() as session:
-            workspaces = (await session.scalars(select(Workspace))).all()
-            for workspace in workspaces:
-                try:
-                    if not await heartbeat.should_run(session, workspace, now):
-                        continue
-                    # «Тик» состоялся: пульс задаёт частоту размышлений, а
-                    # initiative % — вероятность, что этот тик станет сообщением.
-                    # Бросок ДО LLM: при низкой инициативе почти всегда экономим
-                    # ход, но heartbeat_last всё равно двигаем (ритм = интервал).
-                    percent = heartbeat.initiative_percent(workspace)
-                    if random.random() * 100 < percent:
-                        await _run_one_heartbeat(bot, session, workspace, now, percent)
-                    else:
-                        workspace.settings = {
-                            **(workspace.settings or {}),
-                            "heartbeat_last": now.isoformat(),
-                        }
-                    await session.commit()
-                except LlmError as exc:
-                    logger.warning("Хартбит ws %s: LLM упал: %s", workspace.id, exc)
-                    await alerts.record_llm_failure(bot)
-                    await session.rollback()
-                except Exception:
-                    logger.exception("Хартбит ws %s упал", workspace.id)
-                    await session.rollback()
+        ws_ids = await _all_workspace_ids()
     except Exception as exc:
-        logger.exception("Cron run_heartbeats упал целиком")
+        logger.exception("Cron run_heartbeats: не смог получить список чатов")
         await alerts.notify_admins(
             ctx["bot"], f"⚠️ Cron run_heartbeats упал: {exc}", kind="cron:run_heartbeats"
         )
+        return
+
+    # Своя сессия на чат: rollback при сбое одного не экспайрит остальных
+    for wsid in ws_ids:
+        async with session_factory() as session:
+            try:
+                workspace = await session.get(Workspace, wsid)
+                if workspace is None or not await heartbeat.should_run(
+                    session, workspace, now
+                ):
+                    continue
+                # «Тик» состоялся: пульс задаёт частоту размышлений, а
+                # initiative % — вероятность, что этот тик станет сообщением.
+                # Бросок ДО LLM: при низкой инициативе почти всегда экономим
+                # ход, но heartbeat_last всё равно двигаем (ритм = интервал).
+                percent = heartbeat.initiative_percent(workspace)
+                if random.random() * 100 < percent:
+                    await _run_one_heartbeat(bot, session, workspace, now, percent)
+                else:
+                    workspace.settings = {
+                        **(workspace.settings or {}),
+                        "heartbeat_last": now.isoformat(),
+                    }
+                await session.commit()
+            except LlmError as exc:
+                logger.warning("Хартбит ws %s: LLM упал: %s", wsid, exc)
+                await alerts.record_llm_failure(bot)
+                await session.rollback()
+            except Exception:
+                logger.exception("Хартбит ws %s упал", wsid)
+                await session.rollback()
 
 
 class WorkerSettings:

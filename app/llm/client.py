@@ -72,7 +72,12 @@ async def chat(
         raise LlmError(f"OpenRouter недоступен: {exc}") from exc
     latency_ms = int((time.monotonic() - started) * 1000)
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:  # не-JSON: HTML-страница ошибки шлюза, пустой ответ
+        raise LlmError(
+            f"OpenRouter вернул не-JSON ({response.status_code}): {response.text[:300]}"
+        ) from exc
     try:
         message = data["choices"][0]["message"]
     except (KeyError, IndexError) as exc:
@@ -254,7 +259,12 @@ async def generate_image(prompt: str, model: str) -> LlmResult:
         raise LlmError(f"OpenRouter недоступен: {exc}") from exc
     latency_ms = int((time.monotonic() - started) * 1000)
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:  # не-JSON: HTML-страница ошибки шлюза, пустой ответ
+        raise LlmError(
+            f"OpenRouter вернул не-JSON ({response.status_code}): {response.text[:300]}"
+        ) from exc
     try:
         message = data["choices"][0]["message"]
     except (KeyError, IndexError) as exc:

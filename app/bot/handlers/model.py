@@ -63,12 +63,16 @@ async def _status_text(session: AsyncSession, workspace: Workspace) -> str:
 
 
 async def _list_text(session: AsyncSession, workspace: Workspace) -> str:
-    wh_cap, sm_cap, _, _ = await _effective(session, workspace)
-    rows = await models_catalog.cheapest(session, limit=15)
+    wh_cap, _sm, _, _ = await _effective(session, workspace)
+    rows = await models_catalog.featured(session)
     if not rows:
         return "Каталог пуст — синк ещё не прошёл. Загляни через минуту."
     cap_score = await models_catalog.score(session, wh_cap)
-    lines = ["🗂 <b>Модели (дешёвые сверху)</b>  — ✓ можно участнику (≤ workhorse-дефолта):", ""]
+    lines = [
+        "🗂 <b>Популярные модели</b> (дешёвые сверху, цена вход/выход за 1M)",
+        f"✓ — можно участнику (≤ workhorse-дефолта <code>{_esc(wh_cap)}</code>):",
+        "",
+    ]
     for r in rows:
         ok = cap_score is not None and models_catalog.blended(r.price_in, r.price_out) <= cap_score + 1e-9
         mark = "✓" if ok else "•"
@@ -76,7 +80,7 @@ async def _list_text(session: AsyncSession, workspace: Workspace) -> str:
             f"{mark} <code>{_esc(r.id)}</code> — ${float(r.price_in):.2f}/${float(r.price_out):.2f}"
         )
     lines.append("")
-    lines.append("Полный каталог — на openrouter.ai/models. Ставь по точному id.")
+    lines.append("Можно любую с openrouter.ai/models — ставь по точному id.")
     return "\n".join(lines)
 
 

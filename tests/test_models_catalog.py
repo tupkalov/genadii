@@ -63,6 +63,16 @@ async def test_cheapest_sorted_ascending(session):
     assert scores == sorted(scores)  # дешёвые сверху
 
 
+async def test_featured_present_and_sorted(session):
+    # читает реальный синкнутый каталог (без записи)
+    rows = await models_catalog.featured(session)
+    ids = [r.id for r in rows]
+    assert all(i in models_catalog.FEATURED for i in ids)  # только из подборки
+    scores = [models_catalog.blended(r.price_in, r.price_out) for r in rows]
+    assert scores == sorted(scores)  # дешёвые сверху
+    assert "openai/gpt-5-mini" in ids  # тир-дефолт должен быть (синк прошёл)
+
+
 async def test_reconcile_downgrades_expensive_override(session):
     await _add(session, "t/newcheap", 0.10, 0.40)
     await _add(session, "t/wasexpensive", 2, 10)

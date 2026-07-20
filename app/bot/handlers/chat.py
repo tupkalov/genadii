@@ -48,10 +48,20 @@ TRANSCRIBE_PROMPT = (
 )
 
 
+# @-упоминания (ASCII-юзернеймы Telegram), не часть e-mail
+_MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z0-9_]{2,})")
+
+
 def _addressed_to_bot(message: Message, bot_username: str) -> bool:
     content = message.text or message.caption or ""
-    if f"@{bot_username}" in content:
+    mentions = {m.lower() for m in _MENTION_RE.findall(content)}
+    bu = (bot_username or "").lower()
+    if bu and bu in mentions:
         return True
+    # Обращено к КОНКРЕТНОМУ другому участнику (@кто-то, но не бот) — не наше
+    # дело, даже если это реплай на сообщение бота (юзер просто процитировал).
+    if mentions:
+        return False
     reply = message.reply_to_message
     return bool(
         reply and reply.from_user and reply.from_user.username == bot_username

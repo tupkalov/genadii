@@ -138,3 +138,37 @@ async def cheapest(session: AsyncSession, limit: int = 15) -> list[ModelInfo]:
     rows = (await session.scalars(select(ModelInfo).where(ModelInfo.active))).all()
     rows.sort(key=lambda r: blended(r.price_in, r.price_out))
     return rows[:limit]
+
+
+# Подборка узнаваемых моделей по тирам для /model list — иначе список забивают
+# бесплатные/безымянные (самые дешёвые), а популярных не видно. Несуществующие
+# в каталоге id просто отсеиваются. Обновлять редко, вручную.
+FEATURED = [
+    "openai/gpt-5-nano",
+    "deepseek/deepseek-v4-flash",
+    "google/gemini-2.5-flash-lite",
+    "meta-llama/llama-3.3-70b-instruct",
+    "deepseek/deepseek-chat",
+    "openai/gpt-5-mini",
+    "google/gemini-2.5-flash",
+    "deepseek/deepseek-v4-pro",
+    "mistralai/mistral-medium-3.1",
+    "openai/gpt-5.4-mini",
+    "qwen/qwen3-max",
+    "anthropic/claude-haiku-4.5",
+    "openai/gpt-5",
+    "google/gemini-2.5-pro",
+    "anthropic/claude-sonnet-5",
+    "anthropic/claude-opus-4.8",
+]
+
+
+async def featured(session: AsyncSession) -> list[ModelInfo]:
+    """Популярные модели из подборки, что есть в каталоге, дешёвые сверху."""
+    rows = []
+    for model_id in FEATURED:
+        row = await get(session, model_id)
+        if row is not None and row.active:
+            rows.append(row)
+    rows.sort(key=lambda r: blended(r.price_in, r.price_out))
+    return rows

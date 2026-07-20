@@ -61,7 +61,7 @@ async def test_tool_call_escalates_to_smart(session, workspace, user, monkeypatc
     monkeypatch.setattr(llm_chat.client, "chat", fake)
     out = await llm_chat.generate_reply(session, workspace, user, guard_offtopic=False)
     assert calls == [base, smart]  # переигран на Sonnet
-    assert out.text == "ответ"
+    assert out.text == "ответ 🧠"  # помечен маркером умной модели
 
 
 async def test_escalate_schema_only_for_cheap(session, workspace, user, monkeypatch):
@@ -96,7 +96,7 @@ async def test_per_chat_tiers_used(session, workspace, user, monkeypatch):
     monkeypatch.setattr(llm_chat.client, "chat", fake)
     out = await llm_chat.generate_reply(session, workspace, user, guard_offtopic=False)
     assert calls == ["chat/cheap", "chat/smart"]
-    assert out.text == "ответ"
+    assert out.text == "ответ 🧠"
 
 
 async def test_pinned_model_no_router(session, workspace, user, monkeypatch):

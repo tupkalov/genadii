@@ -129,6 +129,22 @@ def strip_leading_timestamp(text: str) -> str:
     return text
 
 
+# Маркер «ответ дала умная модель» (эскалация на smart). Ставим в конец
+# готового ответа; из истории срезаем, чтобы модель его не копировала.
+SMART_MARK = "🧠"
+_SMART_MARK_RE = re.compile(r"\s*🧠\s*$")
+
+
+def mark_smart(text: str, escalated: bool) -> str:
+    if escalated and text.strip() and not _SMART_MARK_RE.search(text):
+        return f"{text} {SMART_MARK}"
+    return text
+
+
+def strip_smart_mark(text: str) -> str:
+    return _SMART_MARK_RE.sub("", text)
+
+
 def gap_note(delta_seconds: float) -> str | None:
     """Человеко-читаемый маркер паузы, если разрыв существенный, иначе None.
 
@@ -202,8 +218,10 @@ async def _build_messages(
                 messages.append({"role": "user", "content": note})
         prev_dt = msg.created_at
         if msg.role == MessageRole.assistant:
+            # срезаем служебный 🧠-маркер, чтобы модель его не копировала
+            body = strip_smart_mark(msg.content)
             messages.append(
-                {"role": "assistant", "content": _stamp(msg.created_at) + msg.content}
+                {"role": "assistant", "content": _stamp(msg.created_at) + body}
             )
         else:
             content = msg.content
@@ -423,7 +441,8 @@ async def generate_reply(
                     ):
                         text = strip_leading_timestamp(retry.content)
             return ChatOutcome(
-                text=text, usages=usages, attachments=ctx.attachments
+                text=mark_smart(text, escalated),
+                usages=usages, attachments=ctx.attachments,
             )
 
         # Раунд закончился вызовом инструментов: фиксируем его мысли в черновике
@@ -449,10 +468,13 @@ async def generate_reply(
                 }
             )
 
-    fallback_text = usages[-1].content or ""
+    fallback_text = strip_leading_timestamp(usages[-1].content or "")
     if not fallback_text or _has_leaked_tool_syntax(fallback_text):
         fallback_text = "Я запутался в инструментах, попробуй ещё раз 🙈"
-    return ChatOutcome(text=fallback_text, usages=usages, attachments=ctx.attachments)
+    return ChatOutcome(
+        text=mark_smart(fallback_text, escalated),
+        usages=usages, attachments=ctx.attachments,
+    )
 
 
 INTERJECT_INSTRUCTION = (

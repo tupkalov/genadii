@@ -1,7 +1,27 @@
 """Маркер паузы в истории: модель должна чувствовать разрывы во времени."""
 import pytest
 
-from app.services.llm_chat import gap_note, strip_leading_timestamp
+from app.services.llm_chat import (
+    gap_note,
+    mark_smart,
+    strip_leading_timestamp,
+    strip_smart_mark,
+)
+
+
+def test_mark_smart_appends_only_when_escalated():
+    assert mark_smart("Готово", True) == "Готово 🧠"
+    assert mark_smart("Готово", False) == "Готово"
+    assert mark_smart("", True) == ""  # пустой не метим
+    assert mark_smart("Уже 🧠", True) == "Уже 🧠"  # не дублируем
+
+
+def test_strip_smart_mark_roundtrip():
+    assert strip_smart_mark("Готово 🧠") == "Готово"
+    assert strip_smart_mark("Готово") == "Готово"
+    assert strip_smart_mark("текст 🧠 в середине не трогаем") == (
+        "текст 🧠 в середине не трогаем"
+    )
 
 
 @pytest.mark.parametrize(

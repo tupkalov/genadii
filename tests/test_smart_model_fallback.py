@@ -4,7 +4,7 @@ import pytest
 
 from app.config import get_settings
 from app.llm.client import LlmError, LlmResult
-from app.services import llm_chat
+from app.services import app_settings, llm_chat
 
 
 def _result(model: str) -> LlmResult:
@@ -24,7 +24,10 @@ async def test_smart_model_failure_falls_back_to_base(
 ):
     """Эскалация — оптимизация: падение smart-модели не должно ронять ход."""
     smart = get_settings().smart_model
-    base = llm_chat.pick_model(workspace)
+    # base — как его резолвит generate_reply: глобальный дефолт из БД, иначе
+    # конфиг (не завязываемся на конкретную модель — она может быть сменена)
+    global_default = await app_settings.default_model(session)
+    base = llm_chat.pick_model(workspace, default_model=global_default)
     calls: list[str] = []
 
     async def fake_chat(messages, model, tools=None):

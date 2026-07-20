@@ -2,6 +2,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,23 +149,36 @@ async def _build_messages(
             f"- {f.content}" for f in facts
         )
 
+    # Метка времени у каждого сообщения — абсолютная (стабильна → не ломает
+    # промпт-кэш, в отличие от «N назад»). В том же поясе, что «Сейчас:» в
+    # системном промпте, чтобы модель верно считала возраст темы.
+    tz = ZoneInfo(settings.timezone)
+
+    def _stamp(dt: datetime | None) -> str:
+        return f"[{dt.astimezone(tz):%d.%m %H:%M}] " if dt is not None else ""
+
     messages: list[dict] = [{"role": "system", "content": system}]
     prev_dt: datetime | None = None
     for msg, author in await _load_history(session, workspace, settings.history_limit):
-        # Маркер паузы между соседними сообщениями — чтобы модель чувствовала
-        # разрывы во времени и не считала старую тему актуальной
+        # Маркер паузы между соседними сообщениями — громкий сигнал большого
+        # разрыва (в дополнение к меткам времени), чтобы старая тема не читалась
+        # как актуальная
         if prev_dt is not None and msg.created_at is not None:
             note = gap_note((msg.created_at - prev_dt).total_seconds())
             if note:
                 messages.append({"role": "user", "content": note})
         prev_dt = msg.created_at
         if msg.role == MessageRole.assistant:
-            messages.append({"role": "assistant", "content": msg.content})
+            messages.append(
+                {"role": "assistant", "content": _stamp(msg.created_at) + msg.content}
+            )
         else:
             content = msg.content
             if workspace.type == WorkspaceType.group and author:
                 content = f"{author}: {content}"
-            messages.append({"role": "user", "content": content})
+            messages.append(
+                {"role": "user", "content": _stamp(msg.created_at) + content}
+            )
     if extra_user_message:
         # Пауза между последним сообщением истории и текущим ходом (важно для
         # запланированных задач/хартбита, которые срабатывают спустя часы)

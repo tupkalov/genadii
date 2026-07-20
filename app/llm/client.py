@@ -14,9 +14,40 @@ from app.llm.retry import BACKOFF_SECONDS, RETRIES, request_with_retry
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Провайдеры, где cache_control через OpenRouter даёт эффект (явные брейкпоинты).
+# Gemini/OpenAI кэшируют неявно — им cache_control не нужен и не ставим.
+_CACHE_PREFIXES = ("anthropic/",)
+
 
 class LlmError(Exception):
     pass
+
+
+def _cached_block(text: str) -> dict:
+    return {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+
+
+def with_cache_control(messages: list[dict], model: str) -> list[dict]:
+    """Ставит cache_control-брейкпоинты для моделей с промпт-кэшем (Anthropic).
+
+    Кэшируем самый стабильный и часто переотправляемый префикс:
+    - системный промпт (персона + список инструментов + память + сводка);
+    - последнее сообщение (user/tool) — так история попадает в кэш и
+      переиспользуется в tool-циклах и быстрых доответах.
+    Возвращает НОВЫЙ список — не мутирует переданный (он живёт весь tool-цикл).
+    Слишком короткий префикс Anthropic просто не закэширует — вреда нет."""
+    if not get_settings().prompt_cache or not messages:
+        return messages
+    if not model.startswith(_CACHE_PREFIXES):
+        return messages
+
+    out = list(messages)
+    if out[0].get("role") == "system" and isinstance(out[0].get("content"), str):
+        out[0] = {**out[0], "content": [_cached_block(out[0]["content"])]}
+    last = out[-1]
+    if last.get("role") in ("user", "tool") and isinstance(last.get("content"), str):
+        out[-1] = {**last, "content": [_cached_block(last["content"])]}
+    return out
 
 
 @dataclass
@@ -42,7 +73,7 @@ async def chat(
 
     body: dict = {
         "model": model,
-        "messages": messages,
+        "messages": with_cache_control(messages, model),
         # просим OpenRouter вернуть стоимость запроса в ответе
         "usage": {"include": True},
     }
@@ -126,7 +157,7 @@ async def chat_stream(
 
     body: dict = {
         "model": model,
-        "messages": messages,
+        "messages": with_cache_control(messages, model),
         "stream": True,
         "usage": {"include": True},
     }

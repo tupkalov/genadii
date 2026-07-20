@@ -46,6 +46,8 @@ PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
  </div>
  <h2>Расходы по чатам (30 дней)</h2>
  <table><tr><th>Чат</th><th>Тип</th><th>Вызовов</th><th>Токены</th><th>Стоимость</th></tr>{usage_rows}</table>
+ <h2>Расход по моделям (30 дней)</h2>
+ <table><tr><th>Модель</th><th>Вызовов</th><th>Вход</th><th>Выход</th><th>Стоимость</th></tr>{model_rows}</table>
  <h2>Инициатива — хартбит (30 дней)</h2>
  <p class="muted">Размышлений: <b>{hb_total}</b> — заговорил первым <b>{hb_spoke}</b>, смолчал {hb_silent}.</p>
  <table><tr><th>Время</th><th>Чат</th><th>Итог</th><th>Инициатива</th></tr>{hb_rows}</table>
@@ -85,6 +87,21 @@ async def dashboard() -> str:
                 .join(LlmUsage, LlmUsage.workspace_id == Workspace.id)
                 .where(LlmUsage.created_at >= since)
                 .group_by(Workspace.id)
+                .order_by(func.sum(LlmUsage.cost_usd).desc())
+            )
+        ).all()
+
+        by_model = (
+            await session.execute(
+                select(
+                    LlmUsage.model,
+                    func.count(LlmUsage.id),
+                    func.coalesce(func.sum(LlmUsage.prompt_tokens), 0),
+                    func.coalesce(func.sum(LlmUsage.completion_tokens), 0),
+                    func.coalesce(func.sum(LlmUsage.cost_usd), 0),
+                )
+                .where(LlmUsage.created_at >= since)
+                .group_by(LlmUsage.model)
                 .order_by(func.sum(LlmUsage.cost_usd).desc())
             )
         ).all()
@@ -132,6 +149,13 @@ async def dashboard() -> str:
         for title, t, calls, tokens, cost in usage
     ) or "<tr><td colspan=5 class='muted'>пока пусто</td></tr>"
 
+    model_rows = "".join(
+        f"<tr><td>{escape(model or '—')}</td><td>{calls}</td>"
+        f"<td class='muted'>{pin:,}</td><td class='muted'>{pout:,}</td>"
+        f"<td>${float(cost):.4f}</td></tr>"
+        for model, calls, pin, pout, cost in by_model
+    ) or "<tr><td colspan=5 class='muted'>пока пусто</td></tr>"
+
     audit_rows = "".join(
         f"<tr><td class='muted'>{a.created_at:%m-%d %H:%M}</td><td>{escape(a.action)}</td>"
         f"<td class='muted'>{a.workspace_id or '—'}</td>"
@@ -157,7 +181,8 @@ async def dashboard() -> str:
 
     return PAGE.format(
         workspaces=n_ws, messages=n_msg, facts=n_facts, tasks=n_tasks,
-        cost30=float(cost30), usage_rows=usage_rows, audit_rows=audit_rows,
+        cost30=float(cost30), usage_rows=usage_rows, model_rows=model_rows,
+        audit_rows=audit_rows,
         hb_total=hb_total, hb_spoke=hb_spoke, hb_silent=hb_total - hb_spoke,
         hb_rows=hb_rows,
     )

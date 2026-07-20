@@ -59,6 +59,22 @@ async def cmd_stats(
             .limit(10)
         )
     ).all()
+    per_model = (
+        await session.execute(
+            select(
+                LlmUsage.model,
+                func.count(LlmUsage.id),
+                func.coalesce(func.sum(LlmUsage.cost_usd), 0),
+            )
+            .where(
+                LlmUsage.workspace_id == workspace.id,
+                LlmUsage.created_at >= month_start,
+            )
+            .group_by(LlmUsage.model)
+            .order_by(func.sum(LlmUsage.cost_usd).desc())
+            .limit(8)
+        )
+    ).all()
 
     calls, cost_total, p_tokens, c_tokens = total
     text = (
@@ -68,6 +84,11 @@ async def cmd_stats(
         f"• всего: ${cost_total:.4f}\n"
         f"• за 7 дней: ${week:.4f}"
     )
+    if per_model:
+        text += "\n\n<b>По моделям (этот месяц):</b>\n" + "\n".join(
+            f"• <code>{html.escape(model or '—')}</code>: ${cost:.4f} ({cnt} выз.)"
+            for model, cnt, cost in per_model
+        )
     if per_user:
         text += "\n\n<b>Кто сколько в этом месяце:</b>\n" + "\n".join(
             f"• {html.escape(name or uname or '—')}: ${cost:.4f} ({cnt} выз.)"

@@ -27,7 +27,26 @@ from app.tools.registry import ToolContext
 logger = logging.getLogger("gennady.llm_chat")
 
 MAX_TOOL_ITERATIONS = 8  # исследовательские запросы могут делать много поисков подряд
-ESCALATE_AFTER_ITERATIONS = 3  # если зациклились на инструментах — берём модель посильнее
+
+# Роутер моделей: дешёвая (default) модель ведёт простые ходы — болтовню, мнения,
+# быстрые ответы из контекста. Как только ей нужен ИНСТРУМЕНТ (реальное действие
+# с данными) или она сама решает, что задача требует размышления/решения (зовёт
+# escalate), ход переигрывается умной моделью (smart_model). Так дешёвая никогда
+# не исполняет инструменты сама — все реальные действия и решения на сильной
+# модели (нет фантазий на action-задачах), а платим за неё только когда важно.
+_ESCALATE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "escalate",
+        "description": (
+            "Передать ход более сильной модели. Зови, когда задача требует "
+            "настоящего размышления, взвешенного решения или сложного выбора — "
+            "а инструменты для неё не нужны. НЕ зови для простых ответов, шуток, "
+            "болтовни и фактов, которые и так знаешь."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
 
 # Некоторые модели при сбое function-calling вместо структурированного tool_calls
 # пишут псевдо-вызов инструмента прямо в текст ответа (спецтокены вида <｜tool...｜>,
@@ -252,18 +271,27 @@ async def generate_reply(
         def round_delta(text: str) -> None:  # noqa: E306
             on_delta(f"{committed_text}{text}")
 
+    # Первая линия (дешёвая модель) видит реальные инструменты + escalate, чтобы
+    # уметь сказать «нужны действия / нужно подумать». Умная модель escalate не
+    # видит — ей уже некуда эскалировать.
+    first_line_schemas = tool_schemas
+    if can_escalate:
+        first_line_schemas = (tool_schemas or []) + [_ESCALATE_SCHEMA]
+
     usages: list[client.LlmResult] = []
-    had_tool_failure = False  # упавший инструмент → чинит сразу smart-модель
+    escalated = False  # sticky: как только перешли на smart — обратно не возвращаемся
     used_any_tool = False  # был ли хоть один вызов инструмента за ход
     deferral_nudged = False  # анти-«сделаю потом» наджем выдаём один раз
     for iteration in range(MAX_TOOL_ITERATIONS):
         # На последней итерации убираем инструменты: модель обязана дать финальный
         # ответ из уже собранного, а не звать очередной tool (иначе — фолбэк).
         last = iteration == MAX_TOOL_ITERATIONS - 1
-        round_tools = None if last else tool_schemas
-        escalated = can_escalate and (
-            iteration >= ESCALATE_AFTER_ITERATIONS or had_tool_failure
-        )
+        if last:
+            round_tools = None
+        elif escalated or not can_escalate:
+            round_tools = tool_schemas
+        else:
+            round_tools = first_line_schemas
         round_model = smart_model if escalated else model
 
         try:
@@ -282,6 +310,8 @@ async def generate_reply(
                 "Smart-модель %s упала, откатываюсь на %s", round_model, model
             )
             can_escalate = False
+            escalated = False  # дальше едем на дешёвой, без повторных эскалаций
+            round_tools = None if last else tool_schemas  # без escalate-схемы
             if round_delta is not None:
                 result = await client.chat_stream(
                     messages, model, tools=round_tools, on_delta=round_delta
@@ -289,6 +319,19 @@ async def generate_reply(
             else:
                 result = await client.chat(messages, model, tools=round_tools)
         usages.append(result)
+
+        # РОУТЕР: дешёвая модель потянулась к инструменту (реальному или escalate)
+        # — значит ход содержательный. Не исполняем её вызовы и не пишем их в
+        # историю: переигрываем тот же ход умной моделью, она примет решения сама.
+        if not escalated and can_escalate and result.tool_calls:
+            escalated = True
+            tool_names = ", ".join(
+                tc.get("function", {}).get("name", "?") for tc in result.tool_calls
+            )
+            logger.info("Роутер: эскалация на %s (сигнал: %s)", smart_model, tool_names)
+            if round_delta is not None:
+                round_delta("🧠…")
+            continue
 
         if not result.tool_calls:
             if _has_leaked_tool_syntax(result.content):
@@ -373,10 +416,6 @@ async def generate_reply(
         tools_map = {t.name: t for t in tools}
         for tool_call in result.tool_calls:
             output = await execute_tool_call(ctx, tool_call, tools_map=tools_map)
-            # Маркеры наших failure-nudge'ей: со следующего раунда — smart-модель,
-            # дешёвая при починке кода плодит новые баги вместо исправления
-            if "[Код упал" in output or "[Разберись с причиной" in output:
-                had_tool_failure = True
             messages.append(
                 {
                     "role": "tool",

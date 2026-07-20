@@ -115,6 +115,20 @@ async def _load_history(
 _GAP_THRESHOLD_MINUTES = 180
 
 
+# Метку времени [ДД.ММ ЧЧ:ММ] мы ставим сообщениям в контексте; слабая модель
+# иногда копирует её в начало ответа. Срезаем ведущие метки (промптом слабую
+# модель не удержать).
+_LEADING_TS_RE = re.compile(r"^\s*\[\d{2}\.\d{2}\s+\d{2}:\d{2}\]\s*")
+
+
+def strip_leading_timestamp(text: str) -> str:
+    prev = None
+    while text and text != prev:
+        prev = text
+        text = _LEADING_TS_RE.sub("", text, count=1)
+    return text
+
+
 def gap_note(delta_seconds: float) -> str | None:
     """Человеко-читаемый маркер паузы, если разрыв существенный, иначе None.
 
@@ -367,7 +381,7 @@ async def generate_reply(
                     usages=usages,
                     attachments=ctx.attachments,
                 )
-            text = result.content
+            text = strip_leading_timestamp(result.content)
             # Guard: «сделаю потом» без единого инструмента — пустое обещание
             # (фоновой работы у бота нет). Даём ещё один tool-раунд с жёстким
             # наджем, чтобы модель выполнила запрос прямо сейчас. Один раз и
@@ -407,7 +421,7 @@ async def generate_reply(
                     if retry.content.strip() and not _has_leaked_tool_syntax(
                         retry.content
                     ):
-                        text = retry.content
+                        text = strip_leading_timestamp(retry.content)
             return ChatOutcome(
                 text=text, usages=usages, attachments=ctx.attachments
             )

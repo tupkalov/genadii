@@ -1,7 +1,22 @@
 """Маркер паузы в истории: модель должна чувствовать разрывы во времени."""
 import pytest
 
-from app.services.llm_chat import gap_note
+from app.services.llm_chat import gap_note, strip_leading_timestamp
+
+
+@pytest.mark.parametrize(
+    "raw,clean",
+    [
+        ("[20.07 17:29] Понг! 🏓", "Понг! 🏓"),
+        ("  [01.01 09:05]  привет", "привет"),
+        ("[20.07 17:29] [20.07 17:30] дубль", "дубль"),  # несколько меток
+        ("обычный ответ", "обычный ответ"),
+        ("ответ с [20.07 17:29] в середине", "ответ с [20.07 17:29] в середине"),
+        ("", ""),
+    ],
+)
+def test_strip_leading_timestamp(raw, clean):
+    assert strip_leading_timestamp(raw) == clean
 
 
 @pytest.mark.parametrize("minutes", [0, 5, 60, 120, 179])

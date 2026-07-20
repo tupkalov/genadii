@@ -55,6 +55,22 @@ async def test_reset_default_model(session):
     assert await app_settings.default_model(session) == get_settings().default_model
 
 
+async def test_smart_default_falls_back_to_config(session):
+    await app_settings.reset_tier_default(session, "smart")
+    assert await app_settings.smart_default(session) == get_settings().smart_model
+
+
+async def test_set_both_tier_defaults(session):
+    await app_settings.set_tier_default(session, "workhorse", "vendor/wh")
+    await app_settings.set_tier_default(session, "smart", "vendor/sm")
+    assert await app_settings.workhorse_default(session) == "vendor/wh"
+    assert await app_settings.smart_default(session) == "vendor/sm"
+    # тиры независимы
+    await app_settings.reset_tier_default(session, "smart")
+    assert await app_settings.workhorse_default(session) == "vendor/wh"
+    assert await app_settings.smart_default(session) == get_settings().smart_model
+
+
 async def test_generic_kv_roundtrip(session):
     await app_settings.set_value(session, "some_key", {"a": 1})
     assert await app_settings.get_value(session, "some_key") == {"a": 1}

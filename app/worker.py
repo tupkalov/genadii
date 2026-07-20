@@ -437,6 +437,20 @@ async def run_heartbeats(ctx: dict) -> None:
                 await session.rollback()
 
 
+async def sync_models(ctx: dict) -> None:
+    """Синк каталога моделей OpenRouter (цены для потолка + allowlist)."""
+    from app.services import models_catalog
+
+    try:
+        async with session_factory() as session:
+            await models_catalog.sync(session)
+    except Exception as exc:
+        logger.exception("Cron sync_models упал")
+        await alerts.notify_admins(
+            ctx["bot"], f"⚠️ Cron sync_models упал: {exc}", kind="cron:sync_models"
+        )
+
+
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = startup
@@ -452,4 +466,6 @@ class WorkerSettings:
         # Хартбит: проверяем гейты каждые ~15 мин, LLM-ход — только для «дозревших»
         # чатов (интервал размышления ≥ heartbeat_interval_minutes)
         cron(run_heartbeats, minute={8, 23, 38, 53}),
+        # Каталог моделей: раз в сутки + на старте (чтобы потолок цен был свежим)
+        cron(sync_models, hour={4}, minute={7}, run_at_startup=True),
     ]

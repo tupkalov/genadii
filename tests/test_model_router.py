@@ -82,6 +82,23 @@ async def test_escalate_schema_only_for_cheap(session, workspace, user, monkeypa
     assert "escalate" not in smart_tools  # умной эскалировать некуда
 
 
+async def test_per_chat_tiers_used(session, workspace, user, monkeypatch):
+    # per-chat workhorse/smart перекрывают глобальные; роутер меж ними работает
+    workspace.settings = {"workhorse": "chat/cheap", "smart": "chat/smart"}
+    calls: list[str] = []
+
+    async def fake(messages, model, tools=None):
+        calls.append(model)
+        if model == "chat/cheap":
+            return _tool("chat/cheap", "add-tasks")
+        return _final("chat/smart")
+
+    monkeypatch.setattr(llm_chat.client, "chat", fake)
+    out = await llm_chat.generate_reply(session, workspace, user, guard_offtopic=False)
+    assert calls == ["chat/cheap", "chat/smart"]
+    assert out.text == "ответ"
+
+
 async def test_pinned_model_no_router(session, workspace, user, monkeypatch):
     # чат с явным /model override — роутер не вмешивается, всё на этой модели
     workspace.settings = {"model_override": "some/pinned-model"}

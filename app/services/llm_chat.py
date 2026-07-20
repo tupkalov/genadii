@@ -237,19 +237,30 @@ async def generate_reply(
     tools = skills_service.filter_tools(tools, allowed_tools)
     messages = await _build_messages(session, workspace, extra_user_message, tools, user)
     is_multimodal = isinstance(extra_user_message, list)
-    global_default = await app_settings.default_model(session)
-    model = force_model or pick_model(
-        workspace, multimodal=is_multimodal, default_model=global_default
-    )
-    # Эскалация на smart-модель при зацикливании: не трогаем мультимодальные
-    # ходы (там нужна именно vision-модель), явный оверрайд пользователя
-    # и разовый force_model.
-    can_escalate = (
-        force_model is None
-        and not is_multimodal
-        and not (workspace.settings or {}).get("model_override")
-    )
-    smart_model = get_settings().smart_model
+    # Резолвим оба тира: per-chat → глобальный (БД) → конфиг. Роутер работает,
+    # когда workhorse ≠ smart. Мультимодалка идёт на vision-модель без роутинга;
+    # force_model (напр. /retry smart) пиннит один ход на одну модель.
+    ws_settings = workspace.settings or {}
+    if is_multimodal:
+        model = smart_model = pick_model(workspace, multimodal=True)
+        can_escalate = False
+    elif force_model:
+        model = smart_model = force_model
+        can_escalate = False
+    else:
+        # Легаси model_override пиннит ОБА тира (старое «одна модель, без роутера»)
+        override = ws_settings.get("model_override")
+        model = (
+            ws_settings.get("workhorse")
+            or override
+            or await app_settings.workhorse_default(session)
+        )
+        smart_model = (
+            ws_settings.get("smart")
+            or override
+            or await app_settings.smart_default(session)
+        )
+        can_escalate = model != smart_model
 
     tool_schemas = [t.to_openrouter() for t in tools] or None
     ctx = ToolContext(

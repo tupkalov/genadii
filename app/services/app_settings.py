@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.models import AppSetting
 
-DEFAULT_MODEL_KEY = "default_model"
+DEFAULT_MODEL_KEY = "default_model"  # глобальный workhorse
+DEFAULT_SMART_KEY = "default_smart"  # глобальный smart (эскалация)
 
 
 async def get_value(session: AsyncSession, key: str) -> Any | None:
@@ -39,18 +40,42 @@ async def delete_value(session: AsyncSession, key: str) -> None:
         await session.flush()
 
 
-async def default_model(session: AsyncSession) -> str:
-    """Глобальный дефолт модели: из БД, иначе из конфига/.env."""
+async def workhorse_default(session: AsyncSession) -> str:
+    """Глобальный workhorse (дешёвая первая линия): БД, иначе конфиг/.env."""
     value = await get_value(session, DEFAULT_MODEL_KEY)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return get_settings().default_model
 
 
+async def smart_default(session: AsyncSession) -> str:
+    """Глобальный smart (эскалация): БД, иначе конфиг/.env."""
+    value = await get_value(session, DEFAULT_SMART_KEY)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return get_settings().smart_model
+
+
+async def set_tier_default(session: AsyncSession, tier: str, model: str) -> None:
+    key = DEFAULT_SMART_KEY if tier == "smart" else DEFAULT_MODEL_KEY
+    await set_value(session, key, model.strip())
+
+
+async def reset_tier_default(session: AsyncSession, tier: str) -> None:
+    key = DEFAULT_SMART_KEY if tier == "smart" else DEFAULT_MODEL_KEY
+    await delete_value(session, key)
+
+
+# --- Обратная совместимость (старое API = workhorse) --------------------------
+
+
+async def default_model(session: AsyncSession) -> str:
+    return await workhorse_default(session)
+
+
 async def set_default_model(session: AsyncSession, model: str) -> None:
-    await set_value(session, DEFAULT_MODEL_KEY, model.strip())
+    await set_tier_default(session, "workhorse", model)
 
 
 async def reset_default_model(session: AsyncSession) -> None:
-    """Убрать БД-оверрайд — вернуться к значению из конфига/.env."""
-    await delete_value(session, DEFAULT_MODEL_KEY)
+    await reset_tier_default(session, "workhorse")

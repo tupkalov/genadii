@@ -48,6 +48,27 @@ TRANSCRIBE_PROMPT = (
 )
 
 
+async def _transcribe_voice(message: Message, file_id: str) -> client.LlmResult:
+    """Скачивает голосовое и распознаёт аудио-моделью. Бросает LlmError."""
+    file = await message.bot.download(file_id)
+    encoded = base64.b64encode(file.read()).decode()
+    return await client.chat(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": TRANSCRIBE_PROMPT},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": encoded, "format": "ogg"},
+                    },
+                ],
+            }
+        ],
+        get_settings().audio_model,
+    )
+
+
 # @-упоминания (ASCII-юзернеймы Telegram), не часть e-mail
 _MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z0-9_]{2,})")
 
@@ -340,6 +361,29 @@ async def _photo_extra(message: Message, file_id: str) -> list[dict] | None:
     ]
 
 
+async def _inject_replied_voice(
+    message: Message, user: User, workspace: Workspace, session: AsyncSession, reply: Message
+) -> None:
+    """Реплай на голосовое: распознаём и кладём расшифровку в историю отдельной
+    строкой, помеченной как голосовое — модель поймёт и что сказали, и что это
+    был голос. Дороже (аудио-модель), поэтому только когда к боту обратились."""
+    try:
+        result = await _transcribe_voice(message, reply.voice.file_id)
+    except LlmError as exc:
+        logger.error("Reply-voice transcribe error (ws=%s): %s", workspace.id, exc)
+        await alerts.record_llm_failure(message.bot)
+        return
+    text = result.content.strip()
+    if not text:
+        return
+    author = messages._reply_author(reply)
+    note = f"[в ответ на голосовое от {author}] расшифровка: «{text}»"
+    saved = await messages.save_user_text(
+        session, workspace, user, note, tg_message_id=None
+    )
+    await llm_chat.log_usages(session, workspace, [result], message_id=saved.id, user_id=user.id)
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def on_text(
     message: Message,
@@ -361,6 +405,10 @@ async def on_text(
     reply = message.reply_to_message
     if reply and reply.photo:
         extras = await _photo_extra(message, reply.photo[-1].file_id)
+    elif reply and reply.voice:
+        # Ответ на голосовое: распознаём его и кладём расшифровку в историю —
+        # иначе бот не знает ни что там сказали, ни что это вообще был голос.
+        await _inject_replied_voice(message, user, workspace, session, reply)
     elif _PHOTO_REF_RE.search(message.text or ""):
         # Про фото спрашивают без реплая («сколько на фотке глютена»), а картинку
         # скинули парой сообщений выше. Если в этой серии фото ещё не приложено
@@ -448,24 +496,8 @@ async def on_voice(
 
     await message.bot.send_chat_action(message.chat.id, "typing")
 
-    file = await message.bot.download(message.voice.file_id)
-    encoded = base64.b64encode(file.read()).decode()
     try:
-        transcription = await client.chat(
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": TRANSCRIBE_PROMPT},
-                        {
-                            "type": "input_audio",
-                            "input_audio": {"data": encoded, "format": "ogg"},
-                        },
-                    ],
-                }
-            ],
-            get_settings().audio_model,
-        )
+        transcription = await _transcribe_voice(message, message.voice.file_id)
     except LlmError as exc:
         logger.error("Transcribe error (workspace=%s): %s", workspace.id, exc)
         await alerts.record_llm_failure(message.bot)

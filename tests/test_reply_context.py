@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.services.messages import _decorate
+from app.services.messages import _decorate, _media_label
 
 
 def _msg(**kwargs):
@@ -44,6 +44,30 @@ def test_reply_quote_takes_priority_over_full_text():
     decorated = _decorate(message, message.text)
     assert "[в ответ на сообщение ari: «про дачу»]" in decorated
     assert "длинное сообщение" not in decorated
+
+
+def test_media_label_by_type():
+    def r(**kw):
+        base = dict(photo=None)
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    assert _media_label(r(voice=object())) == "[голосовое]"
+    assert _media_label(r(photo=[object()])) == "[фото]"
+    assert _media_label(r(video_note=object())) == "[видео-кружок]"
+    assert _media_label(r(audio=object())) == "[аудио]"
+    assert _media_label(r()) is None  # обычный текст/пусто
+
+
+def test_reply_to_voice_labeled():
+    # реплай на голосовое без текста → маркер «[голосовое]», бот знает, на что отвечают
+    reply = _msg(text=None, caption=None, photo=None)
+    reply.voice = object()
+    reply.from_user = _user(first_name="Ким")
+    message = _msg(text="@bot что он там сказал?", reply_to_message=reply)
+
+    decorated = _decorate(message, message.text)
+    assert "[в ответ на сообщение Ким: «[голосовое]»]" in decorated
 
 
 def test_reply_to_photo_without_text():

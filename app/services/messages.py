@@ -42,6 +42,24 @@ def _reply_author(reply: TgMessage) -> str:
     return "кого-то"
 
 
+def _media_label(reply: TgMessage) -> str | None:
+    """Ярлык медиа-реплая без текста — чтобы бот знал, на ЧТО отвечают
+    (голосовое/фото/кружок/…), даже когда не транскрибируем."""
+    if reply.photo:
+        return "[фото]"
+    if getattr(reply, "voice", None):
+        return "[голосовое]"
+    if getattr(reply, "video_note", None):
+        return "[видео-кружок]"
+    if getattr(reply, "audio", None):
+        return "[аудио]"
+    if getattr(reply, "video", None):
+        return "[видео]"
+    if getattr(reply, "sticker", None):
+        return "[стикер]"
+    return None
+
+
 def _decorate(tg_message: TgMessage, content: str) -> str:
     """Добавляет к тексту метки реплая, цитаты и пересылки, чтобы модель их учитывала."""
     # Реплай: без метки модель не знает, на какое сообщение отвечают, — а его
@@ -53,7 +71,7 @@ def _decorate(tg_message: TgMessage, content: str) -> str:
         quoted = (
             quote.text
             if quote and quote.text
-            else (reply.text or reply.caption or ("[фото]" if reply.photo else None))
+            else (reply.text or reply.caption or _media_label(reply))
         )
         if quoted:
             snippet = quoted[:REPLY_SNIPPET_LIMIT] + (
